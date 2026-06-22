@@ -611,7 +611,8 @@ export default function App() {
             attachments: msg.attachments || [],
             smtpHost,
             smtpPort,
-            smtpSecure
+            smtpSecure,
+            smtpBypassEnabled: domain?.smtpBypassEnabled === true
           })
         });
 
