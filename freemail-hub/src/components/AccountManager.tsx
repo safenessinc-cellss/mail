@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { Domain, EmailAlias } from '../types';
-import { Mail, Plus, Trash2, ArrowRightLeft, ShieldX, CheckCircle, HelpCircle, Loader2, Smartphone, Download, Laptop, KeyRound, X } from 'lucide-react';
+import { Mail, Plus, Trash2, ArrowRightLeft, ShieldX, CheckCircle, HelpCircle, Loader2, Smartphone, Download, Laptop, KeyRound, X, QrCode } from 'lucide-react';
 import { auth } from '../firebase';
 
 interface AccountManagerProps {
@@ -51,6 +51,68 @@ export default function AccountManager({
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [emailPassword, setEmailPassword] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
+
+  const [downloadMethod, setDownloadMethod] = useState<'direct' | 'qr'>('direct');
+  const [qrCodeLoading, setQrCodeLoading] = useState(false);
+  const [qrCodeSrc, setQrCodeSrc] = useState<string | null>(null);
+  const [qrCodeError, setQrCodeError] = useState<string | null>(null);
+
+  const closeProfileModal = () => {
+    setIsProfileModalOpen(false);
+    setEmailPassword('');
+    setDownloadMethod('direct');
+    setQrCodeSrc(null);
+    setQrCodeError(null);
+    setQrCodeLoading(false);
+  };
+
+  const handleGenerateQRCode = async () => {
+    if (!selectedAlias || !emailPassword) return;
+    setQrCodeLoading(true);
+    setQrCodeError(null);
+    setQrCodeSrc(null);
+    try {
+      let token = '';
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+
+      const response = await fetch('/api/profile/create-qr', {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          email: selectedAlias.address,
+          password: emailPassword,
+          displayName: selectedAlias.localPart.charAt(0).toUpperCase() + selectedAlias.localPart.slice(1),
+          imapHost: selectedAlias.imapHost,
+          imapPort: selectedAlias.imapPort,
+          smtpHost: selectedAlias.smtpHost,
+          smtpPort: selectedAlias.smtpPort,
+          smtpSecure: selectedAlias.smtpSecure
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("No se pudo generar el código temporal de perfil.");
+      }
+
+      const data = await response.json();
+      if (data && data.code) {
+        const downloadUrl = `${window.location.origin}/api/profile/download-config/${data.code}`;
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(downloadUrl)}`;
+        setQrCodeSrc(qrUrl);
+      } else {
+        throw new Error("No se recibió el código del servidor.");
+      }
+    } catch (err: any) {
+      setQrCodeError(err.message || "Error al solicitar QR");
+    } finally {
+      setQrCodeLoading(false);
+    }
+  };
 
   // Set default selectedAliasId if empty and aliases exist
   React.useEffect(() => {
@@ -559,27 +621,24 @@ export default function AccountManager({
         <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
           <div className="flex justify-between items-center px-6 py-4.5 border-b border-slate-100 dark:border-slate-850">
             <h3 className="text-sm font-bold text-slate-955 dark:text-white flex items-center">
-              <KeyRound className="h-4.5 w-4.5 text-emerald-600 mr-2 shrink-0" /> Configurar Perfil para iPhone/iPad
+              <Smartphone className="h-4.5 w-4.5 text-emerald-600 mr-2 shrink-0" /> Perfil para iPhone / iPad
             </h3>
             <button
               type="button"
-              onClick={() => {
-                setIsProfileModalOpen(false);
-                setEmailPassword('');
-              }}
-              className="p-1 text-slate-400 hover:text-slate-650 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition"
+              onClick={closeProfileModal}
+              className="p-1 text-slate-400 hover:text-slate-650 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <form onSubmit={handleGenerateProfile} className="p-6 space-y-4">
+          <div className="p-6 space-y-4">
             <div className="space-y-1">
               <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 font-bold font-mono px-2 py-0.5 rounded border border-emerald-100 dark:border-emerald-900/40">
                 Casilla: {selectedAlias.address}
               </span>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 font-light leading-relaxed">
-                Para que tu dispositivo Apple pueda iniciar sesión de manera segura y automática en tus servidores de correo IMAP y SMTP, ingresa la contraseña correspondiente a esta dirección de correo:
+                Para generar un archivo de configuración autoinstalable firmado por FreeMail, ingresa la contraseña correspondiente a este buzón de correo.
               </p>
             </div>
 
@@ -590,7 +649,10 @@ export default function AccountManager({
               <input
                 type="password"
                 value={emailPassword}
-                onChange={(e) => setEmailPassword(e.target.value)}
+                onChange={(e) => {
+                  setEmailPassword(e.target.value);
+                  setQrCodeSrc(null);
+                }}
                 placeholder="••••••••••••"
                 required
                 autoFocus
@@ -598,41 +660,135 @@ export default function AccountManager({
               />
             </div>
 
-            <div className="p-3.5 bg-amber-50/10 dark:bg-amber-950/5 border border-amber-200/30 dark:border-amber-900/15 rounded-2xl">
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 font-light leading-relaxed">
-                <strong className="font-semibold text-amber-600 dark:text-amber-400">Nota de seguridad:</strong> FreeMail <strong className="font-semibold text-slate-800 dark:text-white">nunca guarda tu contraseña</strong> de casillas de correo. Ésta se utiliza únicamente en memoria para codificar el archivo XML temporal firmándolo de forma segura y se entrega al instante a tu dispositivo en un perfil de tipo <code className="px-1 py-0.5 bg-slate-100 dark:bg-slate-800 font-mono text-[9px] rounded text-slate-700 dark:text-slate-300">.mobileconfig</code>.
-              </p>
-            </div>
+            {/* Selector de Método */}
+            {emailPassword && (
+              <div className="flex bg-slate-100/50 dark:bg-slate-950 p-1 rounded-2xl border border-slate-100 dark:border-slate-850 mt-2">
+                <button
+                  type="button"
+                  onClick={() => setDownloadMethod('direct')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-center text-xs font-semibold rounded-xl transition cursor-pointer ${
+                    downloadMethod === 'direct'
+                      ? 'bg-white dark:bg-slate-900 shadow-sm text-slate-900 dark:text-white'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <Download className="h-3.5 w-3.5" /> Descargar Perfil
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDownloadMethod('qr');
+                    handleGenerateQRCode();
+                  }}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-center text-xs font-semibold rounded-xl transition cursor-pointer ${
+                    downloadMethod === 'qr'
+                      ? 'bg-white dark:bg-slate-900 shadow-sm text-slate-900 dark:text-white'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <QrCode className="h-3.5 w-3.5" /> Escanear QR
+                </button>
+              </div>
+            )}
 
-            {/* Action buttons */}
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-850 flex items-center justify-end space-x-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsProfileModalOpen(false);
-                  setEmailPassword('');
-                }}
-                className="px-4 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 text-slate-650 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded-xl text-xs font-semibold transition"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                disabled={isDownloading}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition flex items-center cursor-pointer shadow-xs"
-              >
-                {isDownloading ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Generando...
-                  </>
+            {downloadMethod === 'direct' ? (
+              <form onSubmit={handleGenerateProfile} className="space-y-4 pt-1">
+                <div className="p-3.5 bg-amber-50/10 dark:bg-amber-950/5 border border-amber-200/30 dark:border-amber-900/15 rounded-2xl">
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-light leading-relaxed">
+                    <strong className="font-semibold text-amber-600 dark:text-amber-400">Nota de seguridad:</strong> FreeMail <strong className="font-semibold text-slate-800 dark:text-white">nunca guarda tu contraseña</strong> de casillas de correo. Ésta se utiliza únicamente en memoria para codificar el archivo XML temporal y entregarlo a tu navegador.
+                  </p>
+                </div>
+
+                {/* Botones de acción */}
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-850 flex items-center justify-end space-x-2">
+                  <button
+                    type="button"
+                    onClick={closeProfileModal}
+                    className="px-4 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 text-slate-650 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isDownloading}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition flex items-center cursor-pointer shadow-xs"
+                  >
+                    {isDownloading ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Generando...
+                      </>
+                    ) : (
+                      <>
+                        Generar y Descargar
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4 pt-1">
+                {!emailPassword ? (
+                  <p className="text-center text-xs text-slate-400 py-4">
+                    Ingresa primero la contraseña arriba para poder generar tu enrutador QR.
+                  </p>
+                ) : qrCodeLoading ? (
+                  <div className="flex flex-col items-center justify-center py-8 space-y-2">
+                    <Loader2 className="h-8 w-8 text-emerald-600 animate-spin" />
+                    <p className="text-xs text-slate-400">Generando código QR dinámico...</p>
+                  </div>
+                ) : qrCodeError ? (
+                  <div className="p-4 bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40 rounded-xl text-xs text-rose-800 dark:text-rose-350 text-center">
+                    {qrCodeError}
+                    <button
+                      type="button"
+                      onClick={handleGenerateQRCode}
+                      className="block mx-auto mt-2 text-xs text-emerald-600 dark:text-emerald-400 font-bold hover:underline"
+                    >
+                      Reintentar generación
+                    </button>
+                  </div>
+                ) : qrCodeSrc ? (
+                  <div className="flex flex-col items-center justify-center p-4 bg-slate-50 dark:bg-slate-950/40 rounded-2xl border border-slate-100 dark:border-slate-850 space-y-3">
+                    <div className="p-3 bg-white rounded-2xl shadow-sm border border-slate-100 flex items-center justify-center">
+                      <img
+                        src={qrCodeSrc}
+                        alt="Código QR de Descarga"
+                        className="h-40 w-40 object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <div className="text-center space-y-1 select-text">
+                      <p className="text-xs font-bold text-slate-900 dark:text-white">Escanea para descargar a tu iPhone</p>
+                      <p className="text-[10.5px] text-slate-500 dark:text-slate-400 font-light leading-normal max-w-xs">
+                        Abre la app <strong>Cámara</strong> de tu iPhone, enfoca el código superior y haz clic en el enlace. Se descargará el perfil en tu dispositivo al instante.
+                      </p>
+                      <span className="inline-block text-[9px] text-amber-600 bg-amber-50 dark:bg-amber-955/20 border border-amber-200/25 px-2.5 py-0.5 rounded-full font-mono mt-1 font-semibold animate-pulse uppercase tracking-wider">
+                        Válido por 3 minutos
+                      </span>
+                    </div>
+                  </div>
                 ) : (
-                  <>
-                    Generar y Descargar
-                  </>
+                  <button
+                    type="button"
+                    onClick={handleGenerateQRCode}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    Generar Código QR Seguro
+                  </button>
                 )}
-              </button>
-            </div>
-          </form>
+
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-850 flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={closeProfileModal}
+                    className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     )}
