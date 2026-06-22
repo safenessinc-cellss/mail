@@ -308,6 +308,7 @@ app.post('/api/mail/send', async (req, res) => {
       });
     }
 
+    let hasTimedOut = false;
     const sendPromise = (async () => {
       const transporter = nodemailer.createTransport({
         host: smtpHost,
@@ -341,6 +342,16 @@ app.post('/api/mail/send', async (req, res) => {
       return await transporter.sendMail(mailOptions);
     })();
 
+    // Shield against Unhandled Promise Rejections if sendPromise completes after the client is responded to
+    const shieldedSendPromise = sendPromise.catch(err => {
+      if (hasTimedOut) {
+        console.warn("[DEBUG/SMTP-SAFE-ABSORB] Captured SMTP rejection after timeout had already resolved:", err.message);
+        // Swallow rejection to prevent node process crash under serverless env
+        return { messageId: "swallowed_delay_rejection_safety" };
+      }
+      throw err;
+    });
+
     // Temporizador de desconexión rápida para evitar FUNCTION_INVOCATION_FAILED de Vercel
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error('SMTP_TIMEOUT_LIMIT_EXCEEDED')), 3800);
@@ -348,13 +359,14 @@ app.post('/api/mail/send', async (req, res) => {
 
     let info: any;
     try {
-      info = await Promise.race([sendPromise, timeoutPromise]);
+      info = await Promise.race([shieldedSendPromise, timeoutPromise]);
       res.json({
         success: true,
         messageId: info.messageId,
         details: 'Envío real exitoso a través del servidor SMTP corporativo.'
       });
     } catch (err: any) {
+      hasTimedOut = true;
       console.warn(`[DEBUG/SMTP-FAIL] Capturado fallo/timeout de conexión SMTP. Activando enrutamiento IA...`, err.message);
       
       const bypassReason = err.message === 'SMTP_TIMEOUT_LIMIT_EXCEEDED'
@@ -425,6 +437,7 @@ app.post('/api/mail/sync', async (req, res) => {
 
   // Real IMAP check
   let client;
+  let imapHasTimedOut = false;
   try {
     const imapPromise = (async () => {
       client = new ImapFlow({
@@ -483,14 +496,25 @@ app.post('/api/mail/sync', async (req, res) => {
       return messages;
     })();
 
+    // Shield against Unhandled Promise Rejections if imapPromise completes after a timeout has responded to the client
+    const shieldedImapPromise = imapPromise.catch(err => {
+      if (imapHasTimedOut) {
+        console.warn("[DEBUG/IMAP-SAFE-ABSORB] Captured IMAP rejection after timeout had already resolved:", err.message);
+        // Swallow
+        return [];
+      }
+      throw err;
+    });
+
     // Temporizador de desconexión rápida para evitar FUNCTION_INVOCATION_FAILED de Vercel
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error('IMAP_TIMEOUT_LIMIT_EXCEEDED')), 3800);
     });
 
-    const messages = await Promise.race([imapPromise, timeoutPromise]);
+    const messages = await Promise.race([shieldedImapPromise, timeoutPromise]);
     res.json({ messages });
   } catch (err: any) {
+    imapHasTimedOut = true;
     console.warn(`[DEBUG/IMAP-FAIL] Capturado fallo/timeout de conexión IMAP. Activando enrutamiento IA...`, err.message);
     if (client) {
       try { await client.logout(); } catch (_) {}
