@@ -2,7 +2,7 @@
   "version": 2,
   "functions": {
     "api/**/*.js": {
-      "runtime": "nodejs"
+      "runtime": "now-node@18.17.0"
     }
   },
   "rewrites": [
