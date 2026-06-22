@@ -869,7 +869,12 @@ export default function App() {
             importedCount++;
           }
         }
-        showToast(`Sincronización finalizada con éxito. Sincronizamos ${importedCount} correos nuevos de ${currentImapServer}.`, "success");
+        
+        if (data.aiBypassed) {
+          showToast(`⚠️ Sincronización IMAP mitigada por IA para eludir restricciones de red (Vercel). Revisa el informe recibido en tu bandeja de entrada.`, "info");
+        } else {
+          showToast(`Sincronización finalizada con éxito. Sincronizamos ${importedCount} correos nuevos de ${currentImapServer}.`, "success");
+        }
       } else {
         showToast(`Tu buzón de correo en ${currentImapServer} está sincronizado y al día. No hay mensajes nuevos.`, "info");
       }
