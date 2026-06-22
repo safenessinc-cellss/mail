@@ -497,7 +497,20 @@ app.post('/api/mail/sync', async (req, res) => {
  * 5. GENERATE APPLE .MOBILECONFIG PROFILE
  * ==========================================
  */
-app.post('/api/profile/generate', (req, res) => {
+
+// Almacén temporal en memoria para perfiles iOS con códigos cortos expirales (2 minutos)
+const iosProfileCodes = new Map<string, any>();
+
+function generateMobileConfigXML(options: {
+  email: string;
+  password?: string;
+  displayName?: string;
+  imapHost?: string;
+  imapPort?: string | number;
+  smtpHost?: string;
+  smtpPort?: string | number;
+  smtpSecure?: boolean;
+}) {
   const {
     email,
     password,
@@ -507,16 +520,12 @@ app.post('/api/profile/generate', (req, res) => {
     smtpHost,
     smtpPort,
     smtpSecure
-  } = req.body;
-
-  if (!email) {
-    return res.status(400).send('Email reference is required.');
-  }
+  } = options;
 
   const payloadUUID = 'F0D6D2B1-46CB-4E80-8772-' + Math.random().toString(36).substring(2, 14).toUpperCase();
   const mailUUID = 'E5BEEF11-4CE7-4F63-AEE1-' + Math.random().toString(36).substring(2, 14).toUpperCase();
 
-  const mobileConfig = `<?xml version="1.0" encoding="UTF-8"?>
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -587,10 +596,77 @@ app.post('/api/profile/generate', (req, res) => {
 	</array>
 </dict>
 </plist>`;
+}
+
+app.post('/api/profile/generate', (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).send('Email reference is required.');
+  }
+
+  const mobileConfig = generateMobileConfigXML(req.body);
 
   res.setHeader('Content-Type', 'application/x-apple-aspen-config');
   res.setHeader('Content-Disposition', `attachment; filename="configuracion-${email.split('@')[0]}.mobileconfig"`);
   res.send(mobileConfig);
+});
+
+// Registrar configuración temporal para descarga QR
+app.post('/api/profile/create-qr', (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'La dirección de correo electrónico es requerida.' });
+  }
+
+  const code = Math.random().toString(36).substring(2, 14).toUpperCase();
+  iosProfileCodes.set(code, req.body);
+
+  // Expira en 3 minutos para dar tiempo a escanearlo cómodamente
+  setTimeout(() => {
+    iosProfileCodes.delete(code);
+  }, 180000);
+
+  res.json({ success: true, code });
+});
+
+// Descargar perfil iOS directo usando el código QR corto desde el dispositivo móvil
+app.get('/api/profile/download-config/:code', (req, res) => {
+  const { code } = req.params;
+  const config = iosProfileCodes.get(code);
+
+  if (!config) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(404).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.5">
+        <title>Enlace Expirado - FreeMail Hub</title>
+        <style>
+          body { font-family: -apple-system, sans-serif; text-align: center; padding: 40px 20px; background-color: #f8fafc; color: #1e293b; }
+          .card { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 24px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
+          h2 { color: #e11d48; margin-top: 0; }
+          p { font-size: 14px; line-height: 1.6; color: #64748b; }
+          .button { display: inline-block; background: #059669; color: white; padding: 10px 20px; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 13px; margin-top: 15px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h2>⏱ Enlace de Perfil Expirado</h2>
+          <p>El enlace de instalación QR temporal de FreeMail Hub ha caducado por motivos de seguridad informática (límite de 3 minutos excedido).</p>
+          <p>Por favor, regresa a la computadora, ingresa la contraseña de correo nuevamente y escanea un nuevo código QR dinámico.</p>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  const { email } = config;
+  const mobileConfigXML = generateMobileConfigXML(config);
+
+  res.setHeader('Content-Type', 'application/x-apple-aspen-config');
+  res.setHeader('Content-Disposition', `attachment; filename="configuracion-${email.split('@')[0]}.mobileconfig"`);
+  res.send(mobileConfigXML);
 });
 
 /**
