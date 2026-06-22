@@ -128,17 +128,23 @@ async function resolveMxSecurely(domain: string): Promise<{ priority: number; ex
     console.warn(`[DEBUG/DNS-MX] Error controlado descodificando de DoH para MX:`, err.message);
   }
 
-  // 2. Fallback nativo resguardado contra rechazos no capturados
+  // 2. Fallback nativo resguardado contra rechazos no capturados (Resolvemos en vez de rechazar para evitar UnhandledPromiseRejection en serverless)
   try {
     console.log(`[DEBUG/DNS-MX] Ejecutando fallback de DNS nativo MX para ${domain}`);
     const nativeRecords = await withTimeout(
-      new Promise<{ priority: number; exchange: string }[]>((resolve, reject) => {
-        dns.resolveMx(domain, (err, records) => {
-          if (err) {
-            return reject(err);
-          }
-          resolve(records || []);
-        });
+      new Promise<{ priority: number; exchange: string }[]>((resolve) => {
+        try {
+          dns.resolveMx(domain, (err, records) => {
+            if (err) {
+              console.warn(`[DEBUG/DNS-MX-NATIVE] Falló consulta nativa de MX para ${domain}:`, err.message);
+              return resolve([]);
+            }
+            resolve(records || []);
+          });
+        } catch (syncErr: any) {
+          console.warn(`[DEBUG/DNS-MX-NATIVE] Excepción síncrona en consulta nativa de MX:`, syncErr.message);
+          resolve([]);
+        }
       }),
       1200,
       []
@@ -166,17 +172,23 @@ async function resolveTxtSecurely(domain: string): Promise<string[][]> {
     console.warn(`[DEBUG/DNS-TXT] Error controlado descodificando de DoH para TXT:`, err.message);
   }
 
-  // 2. Fallback nativo
+  // 2. Fallback nativo (Resolvemos en vez de rechazar para evitar UnhandledPromiseRejection en serverless)
   try {
     console.log(`[DEBUG/DNS-TXT] Ejecutando fallback de DNS nativo TXT para ${domain}`);
     const nativeRecords = await withTimeout(
-      new Promise<string[][]>((resolve, reject) => {
-        dns.resolveTxt(domain, (err, records) => {
-          if (err) {
-            return reject(err);
-          }
-          resolve(records || []);
-        });
+      new Promise<string[][]>((resolve) => {
+        try {
+          dns.resolveTxt(domain, (err, records) => {
+            if (err) {
+              console.warn(`[DEBUG/DNS-TXT-NATIVE] Falló consulta nativa de TXT para ${domain}:`, err.message);
+              return resolve([]);
+            }
+            resolve(records || []);
+          });
+        } catch (syncErr: any) {
+          console.warn(`[DEBUG/DNS-TXT-NATIVE] Excepción síncrona en consulta nativa de TXT:`, syncErr.message);
+          resolve([]);
+        }
       }),
       1200,
       []
@@ -561,5 +573,4 @@ router.use((err: any, req: Request, res: Response, next: NextFunction) => {
   });
 });
 
-export default router;
-
+export default rou
