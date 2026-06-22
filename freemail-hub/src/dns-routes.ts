@@ -102,80 +102,88 @@ async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
   return [];
 }
 
-// Resolver MX robusto (Primero nativo, luego fallback DoH)
+// Resolver MX robusto (Primero DoH para velocidad y para evitar restricciones serverless, luego native con catch seguro)
 async function resolveMxSecurely(domain: string): Promise<{ priority: number; exchange: string }[]> {
-  const nativePromise = (async () => {
-    console.log(`[DEBUG/DNS-MX] Buscando MX de forma nativa para: ${domain}`);
-    return new Promise<{ priority: number; exchange: string }[]>((resolve, reject) => {
-      dns.resolveMx(domain, (err, records) => {
-        if (err) return reject(err);
-        resolve(records || []);
-      });
-    });
-  })();
-
-  const dohPromise = (async () => {
-    const answers = await resolveDnsViaDoH(domain, "MX");
-    return answers.map(ans => {
-      const parts = ans.trim().split(/\s+/);
-      if (parts.length >= 2) {
-        return {
-          priority: parseInt(parts[0], 10) || 10,
-          exchange: parts[1].replace(/\.$/, "")
-        };
-      } else {
-        return { priority: 10, exchange: ans.replace(/\.$/, "") };
-      }
-    });
-  })();
-
+  console.log(`[DEBUG/DNS-MX] Iniciando resolución MX segura para: ${domain}`);
+  
+  // 1. Intentar DoH primero (es muy rápido y nunca bloquea procesos)
   try {
-    if (process.env.VERCEL) {
-      console.log(`[DEBUG/DNS-MX] Vercel detectado, priorizando consulta DoH para ${domain}`);
-      const r = await withTimeout(dohPromise, 2200, []);
-      if (r.length > 0) return r;
-      return await withTimeout(nativePromise, 1000, []);
-    } else {
-      const r = await withTimeout(nativePromise, 1200, []);
-      if (r.length > 0) return r;
-      return await withTimeout(dohPromise, 1800, []);
+    const answers = await withTimeout(resolveDnsViaDoH(domain, "MX"), 2000, []);
+    if (answers && answers.length > 0) {
+      const records = answers.map(ans => {
+        const parts = ans.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          return {
+            priority: parseInt(parts[0], 10) || 10,
+            exchange: parts[1].replace(/\.$/, "")
+          };
+        } else {
+          return { priority: 10, exchange: ans.replace(/\.$/, "") };
+        }
+      });
+      console.log(`[DEBUG/DNS-MX] Resuelto MX vía DoH con éxito:`, records);
+      return records;
     }
-  } catch (err) {
-    console.warn(`[DEBUG/DNS-MX] Todos los esquemas de resolución de MX fallaron. Retornando respuesta vacía.`);
+  } catch (err: any) {
+    console.warn(`[DEBUG/DNS-MX] Error controlado descodificando de DoH para MX:`, err.message);
+  }
+
+  // 2. Fallback nativo resguardado contra rechazos no capturados
+  try {
+    console.log(`[DEBUG/DNS-MX] Ejecutando fallback de DNS nativo MX para ${domain}`);
+    const nativeRecords = await withTimeout(
+      new Promise<{ priority: number; exchange: string }[]>((resolve, reject) => {
+        dns.resolveMx(domain, (err, records) => {
+          if (err) {
+            return reject(err);
+          }
+          resolve(records || []);
+        });
+      }),
+      1200,
+      []
+    );
+    return nativeRecords;
+  } catch (err: any) {
+    console.warn(`[DEBUG/DNS-MX] Todos los intentos de resolución de MX fallaron (incluido nativo): ${err.message}`);
     return [];
   }
 }
 
-// Resolver TXT robusto (Primero nativo, luego fallback DoH)
+// Resolver TXT robusto (Primero DoH para velocidad y evadir restricciones serverless, luego native con catch seguro)
 async function resolveTxtSecurely(domain: string): Promise<string[][]> {
-  const nativePromise = (async () => {
-    console.log(`[DEBUG/DNS-TXT] Buscando TXT de forma nativa para: ${domain}`);
-    return new Promise<string[][]>((resolve, reject) => {
-      dns.resolveTxt(domain, (err, records) => {
-        if (err) return reject(err);
-        resolve(records || []);
-      });
-    });
-  })();
+  console.log(`[DEBUG/DNS-TXT] Iniciando resolución TXT segura para: ${domain}`);
 
-  const dohPromise = (async () => {
-    const answers = await resolveDnsViaDoH(domain, "TXT");
-    return answers.map(ans => [ans]);
-  })();
-
+  // 1. Intentar DoH primero
   try {
-    if (process.env.VERCEL) {
-      console.log(`[DEBUG/DNS-TXT] Vercel detectado, priorizando consulta DoH para ${domain}`);
-      const r = await withTimeout(dohPromise, 2200, []);
-      if (r.length > 0) return r;
-      return await withTimeout(nativePromise, 1000, []);
-    } else {
-      const r = await withTimeout(nativePromise, 1200, []);
-      if (r.length > 0) return r;
-      return await withTimeout(dohPromise, 1800, []);
+    const answers = await withTimeout(resolveDnsViaDoH(domain, "TXT"), 2000, []);
+    if (answers && answers.length > 0) {
+      const records = answers.map(ans => [ans]);
+      console.log(`[DEBUG/DNS-TXT] Resuelto TXT vía DoH con éxito para ${domain}`);
+      return records;
     }
-  } catch (err) {
-    console.warn(`[DEBUG/DNS-TXT] Todos los esquemas de resolución TXT fallaron o vencieron. Retornando respuesta vacía.`);
+  } catch (err: any) {
+    console.warn(`[DEBUG/DNS-TXT] Error controlado descodificando de DoH para TXT:`, err.message);
+  }
+
+  // 2. Fallback nativo
+  try {
+    console.log(`[DEBUG/DNS-TXT] Ejecutando fallback de DNS nativo TXT para ${domain}`);
+    const nativeRecords = await withTimeout(
+      new Promise<string[][]>((resolve, reject) => {
+        dns.resolveTxt(domain, (err, records) => {
+          if (err) {
+            return reject(err);
+          }
+          resolve(records || []);
+        });
+      }),
+      1200,
+      []
+    );
+    return nativeRecords;
+  } catch (err: any) {
+    console.warn(`[DEBUG/DNS-TXT] Todos los intentos de resolución de TXT fallaron (incluido nativo): ${err.message}`);
     return [];
   }
 }
@@ -554,3 +562,4 @@ router.use((err: any, req: Request, res: Response, next: NextFunction) => {
 });
 
 export default router;
+
