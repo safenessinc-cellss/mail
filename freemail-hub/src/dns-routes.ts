@@ -108,7 +108,7 @@ async function resolveMxSecurely(domain: string): Promise<{ priority: number; ex
   
   // 1. Intentar DoH primero (es muy rápido y nunca bloquea procesos)
   try {
-    const answers = await withTimeout(resolveDnsViaDoH(domain, "MX"), 2000, []);
+    const answers = await withTimeout(resolveDnsViaDoH(domain, "MX"), 1000, []);
     if (answers && answers.length > 0) {
       const records = answers.map(ans => {
         const parts = ans.trim().split(/\s+/);
@@ -146,7 +146,7 @@ async function resolveMxSecurely(domain: string): Promise<{ priority: number; ex
           resolve([]);
         }
       }),
-      1200,
+      600,
       []
     );
     return nativeRecords;
@@ -162,7 +162,7 @@ async function resolveTxtSecurely(domain: string): Promise<string[][]> {
 
   // 1. Intentar DoH primero
   try {
-    const answers = await withTimeout(resolveDnsViaDoH(domain, "TXT"), 2000, []);
+    const answers = await withTimeout(resolveDnsViaDoH(domain, "TXT"), 1000, []);
     if (answers && answers.length > 0) {
       const records = answers.map(ans => [ans]);
       console.log(`[DEBUG/DNS-TXT] Resuelto TXT vía DoH con éxito para ${domain}`);
@@ -190,7 +190,7 @@ async function resolveTxtSecurely(domain: string): Promise<string[][]> {
           resolve([]);
         }
       }),
-      1200,
+      600,
       []
     );
     return nativeRecords;
@@ -573,4 +573,4 @@ router.use((err: any, req: Request, res: Response, next: NextFunction) => {
   });
 });
 
-export default rou
+export default router;
