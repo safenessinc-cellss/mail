@@ -1,646 +1,553 @@
-// src/dns-routes.ts
 import express, { Request, Response, Router, NextFunction } from "express";
 import dns from "dns";
 import { GoogleGenAI } from "@google/genai";
 
 const router: Router = express.Router();
 
-// ==========================================
-// CONFIGURAÇÕES GLOBAIS
-// ==========================================
-const DNS_TIMEOUT = 5000; // 5 segundos
-const DNS_RETRIES = 2;
-const EXPECTED_MX = "10 mx1.hostinger.com y 10 mx2.hostinger.com";
-const EXPECTED_SPF = "v=spf1 include:spf.hostinger.com ~all";
-
-// ==========================================
-// CLIENTE GEMINI (LAZY INIT)
-// ==========================================
 let aiClient: GoogleGenAI | null = null;
 
+// Inicialización diferida del cliente de Gemini
 function getGeminiClient(): GoogleGenAI | null {
   if (!aiClient) {
     const apiKey = process.env.GEMINI_API_KEY;
-    console.log("[DNS] Inicializando Gemini. API Key presente:", !!apiKey);
-    
+    console.log("[DEBUG/DNS] Obteniendo cliente de Gemini. API Key presente:", !!apiKey);
     if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
       try {
         aiClient = new GoogleGenAI({
           apiKey,
           httpOptions: {
-            headers: { 'User-Agent': 'freemailhub-dns' }
+            headers: {
+              'User-Agent': 'aistudio-build'
+            }
           }
         });
-        console.log("[DNS] Gemini inicializado com sucesso!");
+        console.log("[DEBUG/DNS] Cliente de Gemini instanciado con éxito.");
       } catch (err: any) {
-        console.error("[DNS] Erro ao inicializar Gemini:", err.message);
+        console.error("[DEBUG/DNS] Error al instanciar GoogleGenAI:", err);
         aiClient = null;
       }
+    } else {
+      console.log("[DEBUG/DNS] API Key de Gemini omitida o inválida. Se utilizará generador de respaldo.");
     }
   }
   return aiClient;
 }
 
-// ==========================================
-// FUNÇÕES DNS COM FALLBACK ROBUSTO
-// ==========================================
+// Configuración de Hostinger esperada para comparar
+const EXPECTED_MX = "10 mx1.hostinger.com y 10 mx2.hostinger.com";
+const EXPECTED_SPF = "v=spf1 include:spf.hostinger.com ~all";
 
-/**
- * Consulta DNS via HTTPS (DoH) com múltiplos provedores
- */
-async function queryDnsViaDoH(domain: string, type: string): Promise<string[]> {
-  console.log(`[DNS-DoH] Buscando ${type} para: ${domain}`);
-  
+// Función con timeout genérico para asegurar que no nos bloqueemos en serverless
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, defaultValue: T): Promise<T> {
+  let timeoutId: NodeJS.Timeout;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timeoutId = setTimeout(() => {
+      console.warn(`[TIMEOUT] DNS operation timed out after ${timeoutMs}ms.`);
+      resolve(defaultValue);
+    }, timeoutMs);
+  });
+  return Promise.race([
+    promise.then((res) => {
+      clearTimeout(timeoutId);
+      return res;
+    }),
+    timeoutPromise
+  ]);
+}
+
+// Función auxiliar para consultar DNS sobre HTTPS (DoH) como fallback ultra-estable
+async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
+  console.log(`[DEBUG/DNS-DoH] Buscando registro ${type} para: ${name}`);
   const providers = [
-    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`,
-    `https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=${type}`
+    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`,
+    `https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${type}`
   ];
-
-  const allResults: string[] = [];
 
   for (const url of providers) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), DNS_TIMEOUT);
+      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 segundos máx por proveedor
 
       const response = await fetch(url, {
-        headers: { 
-          "accept": "application/dns-json",
-          "User-Agent": "FreeMailHub-DNS/1.0"
-        },
+        headers: { "accept": "application/dns-json" },
         signal: controller.signal
       });
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        console.warn(`[DNS-DoH] ${url} retornou status ${response.status}`);
+        console.warn(`[DEBUG/DNS-DoH] Proveedor ${url} devolvió status ${response.status}`);
         continue;
       }
 
       const data = await response.json();
-      
-      if (data?.Answer?.length > 0) {
+      if (data && Array.isArray(data.Answer) && data.Answer.length > 0) {
         const results = data.Answer.map((ans: any) => {
-          let val = ans.data || "";
-          // Limpa aspas de registros TXT
+          let val: string = ans.data || "";
           if (type.toUpperCase() === "TXT") {
-            while (val.startsWith('"') && val.endsWith('"')) {
+            // Limpiar comillas iniciales/finales de registros TXT
+            if (val.startsWith('"') && val.endsWith('"')) {
               val = val.substring(1, val.length - 1);
             }
           }
           return val;
         });
-        
-        console.log(`[DNS-DoH] ${url}: ${results.length} resultados`);
-        allResults.push(...results);
+        console.log(`[DEBUG/DNS-DoH] Resultados obtenidos de ${url}:`, results);
+        return results;
       }
-    } catch (err: any) {
-      console.warn(`[DNS-DoH] Falha em ${url}:`, err.message);
+    } catch (e: any) {
+      console.warn(`[DEBUG/DNS-DoH] Consulta DoH falló para ${url}:`, e.message);
     }
   }
-
-  // Remove duplicatas
-  const unique = [...new Set(allResults)];
-  console.log(`[DNS-DoH] Total: ${unique.length} resultados únicos`);
-  return unique;
+  console.log(`[DEBUG/DNS-DoH] Sin resultados en proveedores DoH para ${name}`);
+  return [];
 }
 
-/**
- * Resolve MX com fallback (NUNCA LANÇA ERRO)
- */
-async function resolveMxSecure(domain: string): Promise<{ priority: number; exchange: string }[]> {
-  // Tenta DNS nativo primeiro
-  try {
-    console.log(`[DNS-MX] Nativo para: ${domain}`);
-    const records = await new Promise<dns.MxRecord[]>((resolve, reject) => {
-      dns.resolveMx(domain, (err, result) => {
-        if (err) reject(err);
-        else resolve(result || []);
+// Resolver MX robusto (Primero nativo, luego fallback DoH)
+async function resolveMxSecurely(domain: string): Promise<{ priority: number; exchange: string }[]> {
+  const nativePromise = (async () => {
+    console.log(`[DEBUG/DNS-MX] Buscando MX de forma nativa para: ${domain}`);
+    return new Promise<{ priority: number; exchange: string }[]>((resolve, reject) => {
+      dns.resolveMx(domain, (err, records) => {
+        if (err) return reject(err);
+        resolve(records || []);
       });
     });
+  })();
 
-    if (records?.length > 0) {
-      console.log(`[DNS-MX] Nativo: ${records.length} registros`);
-      return records;
-    }
-    throw new Error('Sem registros MX');
-    
-  } catch (err: any) {
-    console.warn(`[DNS-MX] Nativo falhou, usando DoH:`, err.message);
-    
-    try {
-      const dohResults = await queryDnsViaDoH(domain, "MX");
-      
-      if (dohResults.length > 0) {
-        const parsed = dohResults.map(result => {
-          const parts = result.trim().split(/\s+/);
-          if (parts.length >= 2) {
-            return {
-              priority: parseInt(parts[0], 10) || 10,
-              exchange: parts[1].replace(/\.$/, "").toLowerCase()
-            };
-          }
-          return {
-            priority: 10,
-            exchange: result.replace(/\.$/, "").toLowerCase()
-          };
-        });
-        console.log(`[DNS-MX] DoH: ${parsed.length} registros`);
-        return parsed;
+  const dohPromise = (async () => {
+    const answers = await resolveDnsViaDoH(domain, "MX");
+    return answers.map(ans => {
+      const parts = ans.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        return {
+          priority: parseInt(parts[0], 10) || 10,
+          exchange: parts[1].replace(/\.$/, "")
+        };
+      } else {
+        return { priority: 10, exchange: ans.replace(/\.$/, "") };
       }
-      
-      console.warn(`[DNS-MX] DoH sem resultados`);
-      return [];
-      
-    } catch (dohErr: any) {
-      console.error(`[DNS-MX] DoH falhou:`, dohErr.message);
-      return [];
+    });
+  })();
+
+  try {
+    if (process.env.VERCEL) {
+      console.log(`[DEBUG/DNS-MX] Vercel detectado, priorizando consulta DoH para ${domain}`);
+      const r = await withTimeout(dohPromise, 2200, []);
+      if (r.length > 0) return r;
+      return await withTimeout(nativePromise, 1000, []);
+    } else {
+      const r = await withTimeout(nativePromise, 1200, []);
+      if (r.length > 0) return r;
+      return await withTimeout(dohPromise, 1800, []);
     }
+  } catch (err) {
+    console.warn(`[DEBUG/DNS-MX] Todos los esquemas de resolución de MX fallaron. Retornando respuesta vacía.`);
+    return [];
   }
 }
 
-/**
- * Resolve TXT com fallback (NUNCA LANÇA ERRO)
- */
-async function resolveTxtSecure(domain: string): Promise<string[][]> {
-  // Tenta DNS nativo primeiro
-  try {
-    console.log(`[DNS-TXT] Nativo para: ${domain}`);
-    const records = await new Promise<string[][]>((resolve, reject) => {
-      dns.resolveTxt(domain, (err, result) => {
-        if (err) reject(err);
-        else resolve(result || []);
+// Resolver TXT robusto (Primero nativo, luego fallback DoH)
+async function resolveTxtSecurely(domain: string): Promise<string[][]> {
+  const nativePromise = (async () => {
+    console.log(`[DEBUG/DNS-TXT] Buscando TXT de forma nativa para: ${domain}`);
+    return new Promise<string[][]>((resolve, reject) => {
+      dns.resolveTxt(domain, (err, records) => {
+        if (err) return reject(err);
+        resolve(records || []);
       });
     });
+  })();
 
-    if (records?.length > 0) {
-      console.log(`[DNS-TXT] Nativo: ${records.length} registros`);
-      return records;
+  const dohPromise = (async () => {
+    const answers = await resolveDnsViaDoH(domain, "TXT");
+    return answers.map(ans => [ans]);
+  })();
+
+  try {
+    if (process.env.VERCEL) {
+      console.log(`[DEBUG/DNS-TXT] Vercel detectado, priorizando consulta DoH para ${domain}`);
+      const r = await withTimeout(dohPromise, 2200, []);
+      if (r.length > 0) return r;
+      return await withTimeout(nativePromise, 1000, []);
+    } else {
+      const r = await withTimeout(nativePromise, 1200, []);
+      if (r.length > 0) return r;
+      return await withTimeout(dohPromise, 1800, []);
     }
-    throw new Error('Sem registros TXT');
-    
-  } catch (err: any) {
-    console.warn(`[DNS-TXT] Nativo falhou, usando DoH:`, err.message);
-    
-    try {
-      const dohResults = await queryDnsViaDoH(domain, "TXT");
-      
-      if (dohResults.length > 0) {
-        const parsed = dohResults.map(result => [result]);
-        console.log(`[DNS-TXT] DoH: ${parsed.length} registros`);
-        return parsed;
-      }
-      
-      console.warn(`[DNS-TXT] DoH sem resultados`);
-      return [];
-      
-    } catch (dohErr: any) {
-      console.error(`[DNS-TXT] DoH falhou:`, dohErr.message);
-      return [];
-    }
+  } catch (err) {
+    console.warn(`[DEBUG/DNS-TXT] Todos los esquemas de resolución TXT fallaron o vencieron. Retornando respuesta vacía.`);
+    return [];
   }
 }
 
-// ==========================================
-// FUNÇÕES AUXILIARES
-// ==========================================
-
-/**
- * Verifica se um domínio é válido
- */
-function isValidDomain(domain: string): boolean {
-  const regex = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
-  return regex.test(domain);
-}
-
-/**
- * Limpa e normaliza um domínio
- */
-function normalizeDomain(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/^(https?:\/\/)?(www\.)?/, '')
-    .replace(/\/.*$/, '');
-}
-
-// ==========================================
-// ROTAS DA API
-// ==========================================
-
-/**
- * POST /api/dns/verify
- * Verifica todos os registros DNS (MX, SPF, DKIM, DMARC)
- */
-router.post("/verify", async (req: Request, res: Response): Promise<any> => {
-  console.log("[DNS] POST /verify - Body:", JSON.stringify(req.body));
-  
+// POST /api/dns/verify
+router.post("/verify", async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  console.log("[DEBUG/DNS] POST /verify recibido. Body:", JSON.stringify(req.body));
   try {
-    const domainRaw = req.body?.domain || req.body?.domainName;
-    
-    if (!domainRaw || typeof domainRaw !== "string" || !domainRaw.trim()) {
-      return res.status(400).json({
-        success: false,
-        error: "Domínio é obrigatório",
+    const domainParam = req.body?.domain || req.body?.domainName;
+
+    if (!domainParam || typeof domainParam !== "string" || !domainParam.trim()) {
+      console.warn("[DEBUG/DNS] Solicitud rechazada: Falta el nombre del dominio.");
+      const errorPayload = { 
+        success: false, 
+        error: "El dominio es requerido (No domain name provided)",
         domainName: "",
         allConfigured: false,
         allDetected: false
-      });
+      };
+      console.log("[DEBUG/DNS] Respondiendo 400:", JSON.stringify(errorPayload));
+      return res.status(400).json(errorPayload);
     }
 
-    const domain = normalizeDomain(domainRaw);
-    
-    if (!isValidDomain(domain)) {
-      return res.status(400).json({
-        success: false,
-        error: "Domínio inválido. Verifique o formato (ex: exemplo.com)",
-        domainName: domain,
-        allConfigured: false,
-        allDetected: false
-      });
-    }
+    const domain = domainParam.trim().toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, "");
+    console.log(`[DEBUG/DNS] Procesando verificación para el dominio limpio: ${domain}`);
 
-    console.log(`[DNS] Verificando: ${domain}`);
-
-    // ==========================================
-    // 1. VERIFICAÇÃO MX
-    // ==========================================
+    // 1. Verificación MX
     let mxStatus = "failed";
     let mxCurrentValue = "";
-    
     try {
-      const mxRecords = await resolveMxSecure(domain);
-      
-      if (mxRecords && mxRecords.length > 0) {
-        mxCurrentValue = mxRecords.map(r => `${r.priority} ${r.exchange}`).join(", ");
-        
-        const isHostinger = mxRecords.some(r => 
-          r.exchange?.toLowerCase().includes("hostinger") ||
-          r.exchange?.toLowerCase().includes("freemailhub")
-        );
-        
-        mxStatus = isHostinger ? "verified" : "failed";
+      const records = await resolveMxSecurely(domain);
+      if (records && records.length > 0) {
+        mxCurrentValue = records.map(r => `${r.priority} ${r.exchange}`).join(", ");
+        const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && (
+          r.exchange.toLowerCase().includes("hostinger.com") || 
+          r.exchange.toLowerCase().includes("hostinger.es") || 
+          r.exchange.toLowerCase().includes("hostinger.mx")
+        ));
+        mxStatus = configured ? "verified" : "failed";
       } else {
-        mxCurrentValue = "Nenhum registro MX encontrado";
+        mxCurrentValue = "No MX records found";
       }
     } catch (err: any) {
-      mxCurrentValue = `Erro: ${err.message || "Falha na consulta"}`;
+      mxCurrentValue = `Error: ${err.message}`;
     }
 
-    // ==========================================
-    // 2. VERIFICAÇÃO SPF
-    // ==========================================
+    // 2. Verificación SPF
     let spfStatus = "failed";
     let spfCurrentValue = "";
-    
     try {
-      const txtRecords = await resolveTxtSecure(domain);
-      
-      if (txtRecords && txtRecords.length > 0) {
-        const allTxt = txtRecords.flat();
-        const spf = allTxt.find(t => typeof t === "string" && t.startsWith("v=spf1"));
-        
-        if (spf) {
-          spfCurrentValue = spf;
-          const isHostinger = spf.includes("hostinger") || spf.includes("freemailhub");
-          spfStatus = isHostinger ? "verified" : "failed";
-        } else {
-          spfCurrentValue = "Registros TXT encontrados, mas sem SPF";
-        }
+      const txtRecords = await resolveTxtSecurely(domain);
+      const flattened = txtRecords.flat();
+      const spfText = flattened.find(record => record && typeof record === "string" && record.startsWith("v=spf1"));
+      if (spfText) {
+        spfCurrentValue = spfText;
+        const configured = spfText.includes("include:spf.hostinger.com") || spfText.includes("spf.hostinger");
+        spfStatus = configured ? "verified" : "failed";
       } else {
-        spfCurrentValue = "Nenhum registro TXT encontrado";
+        spfCurrentValue = flattened.length > 0 ? "TXT records found, but no SPF starting with v=spf1" : "No TXT records found";
       }
     } catch (err: any) {
-      spfCurrentValue = `Erro: ${err.message || "Falha na consulta"}`;
+      spfCurrentValue = `Error: ${err.message}`;
     }
 
-    // ==========================================
-    // 3. VERIFICAÇÃO DKIM
-    // ==========================================
+    // 3. Verificación DKIM
     let dkimStatus = "failed";
     let dkimCurrentValue = "";
-    
     try {
       const dkimDomain = `default._domainkey.${domain}`;
-      const txtRecords = await resolveTxtSecure(dkimDomain);
-      
-      if (txtRecords && txtRecords.length > 0) {
-        const allTxt = txtRecords.flat();
-        const dkim = allTxt.find(t => 
-          typeof t === "string" && 
-          (t.startsWith("v=DKIM1") || t.includes("k=rsa"))
-        );
-        
-        if (dkim) {
-          dkimCurrentValue = dkim;
-          dkimStatus = "verified";
-        } else {
-          dkimCurrentValue = "Registros encontrados, mas sem DKIM válido";
-        }
+      const txtRecords = await resolveTxtSecurely(dkimDomain);
+      const flattened = txtRecords.flat();
+      const dkimText = flattened.find(record => record && typeof record === "string" && (record.startsWith("v=DKIM1") || record.includes("k=rsa")));
+      if (dkimText) {
+        dkimCurrentValue = dkimText;
+        dkimStatus = "verified";
       } else {
-        dkimCurrentValue = "Nenhum registro DKIM encontrado";
+        dkimCurrentValue = flattened.length > 0 ? "Records found, but no valid DKIM header" : "No DKIM signature found under default._domainkey";
       }
     } catch (err: any) {
-      dkimCurrentValue = `Erro: ${err.message || "Falha na consulta"}`;
+      dkimCurrentValue = `Error: ${err.message}`;
     }
 
-    // ==========================================
-    // 4. VERIFICAÇÃO DMARC
-    // ==========================================
+    // 4. Verificación DMARC
     let dmarcStatus = "failed";
     let dmarcCurrentValue = "";
-    
     try {
       const dmarcDomain = `_dmarc.${domain}`;
-      const txtRecords = await resolveTxtSecure(dmarcDomain);
-      
-      if (txtRecords && txtRecords.length > 0) {
-        const allTxt = txtRecords.flat();
-        const dmarc = allTxt.find(t => 
-          typeof t === "string" && 
-          (t.startsWith("v=DMARC1") || t.includes("p="))
-        );
-        
-        if (dmarc) {
-          dmarcCurrentValue = dmarc;
-          dmarcStatus = "verified";
-        } else {
-          dmarcCurrentValue = "Registros encontrados, mas sem DMARC válido";
-        }
+      const txtRecords = await resolveTxtSecurely(dmarcDomain);
+      const flattened = txtRecords.flat();
+      const dmarcText = flattened.find(record => record && typeof record === "string" && (record.startsWith("v=DMARC1") || record.includes("p=")));
+      if (dmarcText) {
+        dmarcCurrentValue = dmarcText;
+        dmarcStatus = "verified";
       } else {
-        dmarcCurrentValue = "Nenhum registro DMARC encontrado";
+        dmarcCurrentValue = flattened.length > 0 ? "Records found, but no signature starting with v=DMARC1" : "No DMARC records found under _dmarc";
       }
     } catch (err: any) {
-      dmarcCurrentValue = `Erro: ${err.message || "Falha na consulta"}`;
+      dmarcCurrentValue = `Error: ${err.message}`;
     }
 
-    // ==========================================
-    // RESULTADO FINAL
-    // ==========================================
     const allVerified = mxStatus === "verified" && spfStatus === "verified";
 
-    const response = {
+    // Formatear payload exactamente como lo esperan los llamantes
+    const mxObj = { status: mxStatus, currentValue: mxCurrentValue, expected: EXPECTED_MX, host: "@", destination: "mx1.hostinger.com" };
+    const spfObj = { status: spfStatus, currentValue: spfCurrentValue, expected: EXPECTED_SPF, host: "@", destination: EXPECTED_SPF };
+    const dkimObj = { status: dkimStatus, currentValue: dkimCurrentValue, expected: `v=DKIM1; k=rsa; p=... (Selector: default)`, host: "default._domainkey", destination: "Firma DKIM en Hostinger" };
+    const dmarcObj = { status: dmarcStatus, currentValue: dmarcCurrentValue, expected: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`, host: "_dmarc", destination: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}` };
+
+    const responsePayload = {
       success: true,
       domain,
       domainName: domain,
+      mx: mxObj,
+      spf: spfObj,
+      dkim: dkimObj,
+      dmarc: dmarcObj,
+      results: {
+        mx: mxObj,
+        spf: spfObj,
+        dkim: dkimObj,
+        dmarc: dmarcObj
+      },
       allConfigured: allVerified,
       allDetected: allVerified,
-      timestamp: new Date().toISOString(),
-      mx: {
-        status: mxStatus,
-        currentValue: mxCurrentValue,
-        expected: EXPECTED_MX,
-        host: "@",
-        destination: "mx1.hostinger.com"
-      },
-      spf: {
-        status: spfStatus,
-        currentValue: spfCurrentValue,
-        expected: EXPECTED_SPF,
-        host: "@",
-        destination: EXPECTED_SPF
-      },
-      dkim: {
-        status: dkimStatus,
-        currentValue: dkimCurrentValue,
-        expected: "v=DKIM1; k=rsa; p=... (Selector: default)",
-        host: "default._domainkey",
-        destination: "Firma DKIM no Hostinger"
-      },
-      dmarc: {
-        status: dmarcStatus,
-        currentValue: dmarcCurrentValue,
-        expected: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`,
-        host: "_dmarc",
-        destination: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`
-      },
-      results: {
-        mx: mxStatus,
-        spf: spfStatus,
-        dkim: dkimStatus,
-        dmarc: dmarcStatus
-      }
+      timestamp: new Date().toISOString()
     };
 
-    console.log(`[DNS] Verificação concluída para ${domain}`);
-    return res.json(response);
+    console.log("[DEBUG/DNS] Respondiendo verificación con éxito para:", domain);
+    return res.json(responsePayload);
 
   } catch (error: any) {
-    console.error("[DNS] Erro crítico:", error);
-    
-    return res.status(500).json({
+    console.error("[DEBUG/DNS] Error crítico en /verify:", error);
+    const errorPayload = {
       success: false,
-      error: "Erro interno ao verificar DNS",
+      error: "Error interno al verificar los registros DNS",
       details: error.message || String(error),
       domainName: req.body?.domainName || req.body?.domain || "",
       allConfigured: false,
       allDetected: false
-    });
+    };
+    console.log("[DEBUG/DNS] Respondiendo 500 JSON:", JSON.stringify(errorPayload));
+    return res.status(500).json(errorPayload);
   }
 });
 
-/**
- * POST /api/dns/ai-explain
- * Diagnóstico com IA ou fallback local
- */
-router.post("/ai-explain", async (req: Request, res: Response): Promise<any> => {
-  console.log("[DNS] POST /ai-explain - Body:", JSON.stringify(req.body));
+// POST /api/dns/ai-explain - Asesor Quántico de IA para resolución de DNS en Hostinger
+router.post("/ai-explain", async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  console.log("[DEBUG/DNS] POST /ai-explain recibido. Body:", JSON.stringify(req.body));
   
   const { domainName, provider, records } = req.body;
   
   if (!domainName || typeof domainName !== "string" || !domainName.trim()) {
-    return res.status(400).json({
-      success: false,
-      error: "Domínio é obrigatório",
+    console.warn("[DEBUG/DNS] Solicitud rechazada en /ai-explain: Falta domainName.");
+    const errorPayload = { 
+      success: false, 
+      error: "El nombre de dominio es requerido.",
       analysis: null
-    });
+    };
+    console.log("[DEBUG/DNS] Respondiendo 400:", JSON.stringify(errorPayload));
+    return res.status(400).json(errorPayload);
   }
 
-  const domain = normalizeDomain(domainName);
+  const cleanDomain = domainName.trim().toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, "");
 
-  // ==========================================
-  // FALLBACK LOCAL (SEMPRE FUNCIONA)
-  // ==========================================
-  const generateFallback = () => {
-    console.log(`[DNS] Gerando fallback para: ${domain}`);
-    
-    const mx = records?.mx || { verified: false, current: "Não detectado" };
-    const spf = records?.spf || { verified: false, current: "Não detectado" };
-    const dkim = records?.dkim || { verified: false, current: "Não detectado" };
-    const dmarc = records?.dmarc || { verified: false, current: "Não detectado" };
+  // Generador de respaldo de alta fidelidad (local) para garantizar fiabilidad cuántica permanente
+  const generateFallbackResponse = () => {
+    console.log("[DEBUG/DNS] Generando diagnóstico resiliente de respaldo para:", cleanDomain);
+    const mxVal = records?.mx || { verified: false, current: "No detectado", expected: EXPECTED_MX };
+    const spfVal = records?.spf || { verified: false, current: "No detectado", expected: EXPECTED_SPF };
+    const dkimVal = records?.dkim || { verified: false, current: "No detectado", expected: "v=DKIM1; k=rsa; p=MIIBIjAN..." };
+    const dmarcVal = records?.dmarc || { verified: false, current: "No detectado", expected: `v=DMARC1; p=none; rua=mailto:dmarc@${cleanDomain}` };
 
-    let score = 10;
-    if (mx.verified) score += 25;
-    if (spf.verified) score += 25;
-    if (dkim.verified) score += 20;
-    if (dmarc.verified) score += 20;
+    let score = 15;
+    if (mxVal.verified) score += 25;
+    if (spfVal.verified) score += 25;
+    if (dkimVal.verified) score += 20;
+    if (dmarcVal.verified) score += 15;
 
-    const isOk = score >= 80;
+    let statusSummary = "";
+    if (score >= 90) {
+      statusSummary = "Sincronización cuántica completada. El dominio emite señales puras en la red interestelar de FreeMail.";
+    } else if (score >= 60) {
+      statusSummary = "Enlace cibernético parcial. Se detectó una órbita correcta de registros, pero requiere calibrar SPF y MX para estabilizar los envíos.";
+    } else {
+      statusSummary = "Señal en estado de latencia offline. El dominio aún no ha sido enlazado a la constelación de correo Hostinger.";
+    }
+
+    const diagnostics = [
+      {
+        recordType: "MX",
+        status: mxVal.verified ? "OK" : "ERROR",
+        currentValue: mxVal.current || "No detectado",
+        expectedValue: mxVal.expected || "10 mx1.hostinger.com y 10 mx2.hostinger.com",
+        criticality: "ALTA",
+        analysis: mxVal.verified 
+          ? "El enrutador cuántico MX está perfectamente apuntado y listo para descodificar emails entrantes." 
+          : "El registro MX está ausente o mal configurado. Los servidores de internet no saben a dónde enviar tus correos actuales.",
+        actionSteps: mxVal.verified 
+          ? ["No se requiere ninguna acción."] 
+          : [
+              `Accede a la zona DNS avanzada de tu proveedor (${provider || "tu proveedor"}).`,
+              "Elimina registros MX antiguos o redundantes para evitar colisiones de rutas.",
+              "Añade un registro MX: Host/Nombre '@', Prioridad '10', Apunta a 'mx1.hostinger.com' (TTL 14400 o auto).",
+              "Añade un segundo registro MX: Host/Nombre '@', Prioridad '10', Apunta a 'mx2.hostinger.com'."
+            ]
+      },
+      {
+        recordType: "SPF",
+        status: spfVal.verified ? "OK" : "ERROR",
+        currentValue: spfVal.current || "No detectado",
+        expectedValue: spfVal.expected || "v=spf1 include:spf.hostinger.com ~all",
+        criticality: "MEDIA",
+        analysis: spfVal.verified 
+          ? "La directiva SPF de remitente de confianza está activa y protegiendo tu reputación de salida." 
+          : "Falta la directiva SPF en formato TXT. Sin esta regla, plataformas como Gmail pueden marcar tus correos como sospechosos.",
+        actionSteps: spfVal.verified ? ["No se requiere ninguna acción."] : [
+          "Navega al gestor DNS de tu dominio.",
+          "Crea un nuevo registro de tipo TXT.",
+          "Host/Nombre: '@' (o déjalo en blanco según el proveedor).",
+          "Copia este valor exacto sin comillas redundantes: v=spf1 include:spf.hostinger.com ~all",
+          "Guarda los cambios."
+        ]
+      },
+      {
+        recordType: "DKIM",
+        status: dkimVal.verified ? "OK" : "ERROR",
+        currentValue: dkimVal.current || "No detectado",
+        expectedValue: dkimVal.expected || "v=DKIM1; k=rsa; p=MIIB...",
+        criticality: "ALTA",
+        analysis: dkimVal.verified 
+          ? "Llave criptográfica DKIM de 2048 bits validada. Cada mensaje saliente está firmado digitalmente." 
+          : "Falta el subdominio TXT de validación default._domainkey para asegurar tus firmas criptográficas de salida.",
+        actionSteps: dkimVal.verified ? ["No se requiere ninguna acción."] : [
+          "Crea un registro de tipo TXT.",
+          "Host o Nombre del subdominio: default._domainkey",
+          "En el valor copia la clave pública extensa que se generó para tu dominio.",
+          "Asegúrate de que no se corten caracteres y de no duplicar comillas."
+        ]
+      },
+      {
+        recordType: "DMARC",
+        status: dmarcVal.verified ? "OK" : "ERROR",
+        currentValue: dmarcVal.current || "No detectado",
+        expectedValue: dmarcVal.expected || `v=DMARC1; p=none; rua=mailto:dmarc@${cleanDomain}`,
+        criticality: "MEDIA",
+        analysis: dmarcVal.verified 
+          ? "Política DMARC activa. Protege activamente tu marca contra spoofing e imitación de firmas." 
+          : "Falta el registro DMARC para validar desajustes de SPF/DKIM y reportar fraudes.",
+        actionSteps: dmarcVal.verified ? ["No se requiere ninguna acción."] : [
+          "Crea una entrada TXT en el DNS.",
+          "Host o Nombre: _dmarc",
+          `Valor recomendado para comenzar: v=DMARC1; p=none; rua=mailto:dmarc@${cleanDomain}`,
+          "Monitorea los reportes agregados que llegarán a tu correo."
+        ]
+      }
+    ];
+
+    const isOk = score >= 90;
+    const providerStr = String(provider || "").toLowerCase();
+    let providerNote = "Asegúrate de esperar de 10 a 30 minutos para que los registradores DNS propaguen estas nuevas constantes cuánticas.";
+    if (providerStr.includes("cloudflare")) {
+      providerNote = "[SOPORTE CLOUDFLARE] ¡Atención cuántica! Asegúrate de que las nubes de Cloudflare para los registros MX y TXT estén desactivadas (Proxy: Solo DNS / Nube Gris). Si el proxy naranja está activo, el flujo de correo SMTP se interrumpirá.";
+    } else if (providerStr.includes("hostinger")) {
+      providerNote = "[SOPORTE HOSTINGER] Dado que estás usando Hostinger como registrador local, puedes presionar el botón de auto-configuración de Hostinger para inyectar estos registros con un solo clic.";
+    }
 
     return {
-      domainName: domain,
+      domainName: cleanDomain,
       overallScore: score,
+      statusSummary,
+      diagnostics,
       isOk,
-      statusSummary: isOk 
-        ? "✅ Domínio configurado corretamente! Todos os registros DNS estão no lugar."
-        : "⚠️ Configuração incompleta. Verifique os registros abaixo.",
-      diagnostics: [
-        {
-          recordType: "MX",
-          status: mx.verified ? "OK" : "ERROR",
-          currentValue: mx.current || "Não detectado",
-          expectedValue: EXPECTED_MX,
-          criticality: "ALTA",
-          analysis: mx.verified 
-            ? "MX configurado corretamente para recebimento de emails."
-            : "MX não encontrado. Seus emails não serão entregues.",
-          actionSteps: mx.verified 
-            ? ["✅ Nenhuma ação necessária."]
-            : [
-                "Acesse o painel DNS do seu provedor",
-                "Adicione MX: @ → mx1.hostinger.com (prioridade 10)",
-                "Adicione MX: @ → mx2.hostinger.com (prioridade 10)"
-              ]
-        },
-        {
-          recordType: "SPF",
-          status: spf.verified ? "OK" : "ERROR",
-          currentValue: spf.current || "Não detectado",
-          expectedValue: EXPECTED_SPF,
-          criticality: "MÉDIA",
-          analysis: spf.verified
-            ? "SPF configurado. Seus emails serão autenticados."
-            : "SPF ausente. Emails podem ser marcados como spam.",
-          actionSteps: spf.verified
-            ? ["✅ Nenhuma ação necessária."]
-            : [
-                "Crie um registro TXT: @",
-                `Valor: ${EXPECTED_SPF}`
-              ]
-        },
-        {
-          recordType: "DKIM",
-          status: dkim.verified ? "OK" : "ERROR",
-          currentValue: dkim.current || "Não detectado",
-          expectedValue: "v=DKIM1; k=rsa; p=...",
-          criticality: "MÉDIA",
-          analysis: dkim.verified
-            ? "DKIM ativo. Emails assinados digitalmente."
-            : "DKIM ausente. Reduz a confiabilidade dos emails.",
-          actionSteps: dkim.verified
-            ? ["✅ Nenhuma ação necessária."]
-            : [
-                "Crie um registro TXT: default._domainkey",
-                "Adicione a chave pública fornecida pelo Hostinger"
-              ]
-        },
-        {
-          recordType: "DMARC",
-          status: dmarc.verified ? "OK" : "ERROR",
-          currentValue: dmarc.current || "Não detectado",
-          expectedValue: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`,
-          criticality: "BAIXA",
-          analysis: dmarc.verified
-            ? "DMARC ativo. Proteção contra spoofing."
-            : "DMARC ausente. Recomendado para segurança.",
-          actionSteps: dmarc.verified
-            ? ["✅ Nenhuma ação necessária."]
-            : [
-                "Crie um registro TXT: _dmarc",
-                `Valor: v=DMARC1; p=none; rua=mailto:dmarc@${domain}`
-              ]
-        }
-      ],
-      quickActionInstructions: isOk
-        ? "🎉 Tudo pronto! Seu domínio está totalmente configurado."
-        : "🔧 Corrija os registros com status ERROR seguindo os passos acima.",
-      providerNote: provider?.toLowerCase().includes("cloudflare")
-        ? "⚠️ Cloudflare: Desative o proxy (nuvem laranja) para MX e TXT."
-        : "⏱️ Aguarde 10-30 minutos para propagação completa dos DNS."
+      quickActionInstructions: isOk 
+        ? "¡Excelente! Tu dominio está 100% operativo y seguro." 
+        : "Alinea los registros DNS TXT (SPF, DKIM, DMARC) de acuerdo al mapa cuántico.",
+      providerNote
     };
   };
 
-  // ==========================================
-  // TENTA IA PRIMEIRO
-  // ==========================================
   try {
     const ai = getGeminiClient();
-    
     if (!ai) {
-      console.log("[DNS] IA indisponível, usando fallback local");
-      return res.json({
+      console.warn("[DEBUG/DNS] API de Gemini no inicializada (modo simulación). Entrando de forma directa en modo Diagnóstico Resiliente de IA...");
+      const responseBody = {
         success: true,
-        analysis: generateFallback()
-      });
+        analysis: generateFallbackResponse()
+      };
+      console.log("[DEBUG/DNS] Despachando fallback analítico:", JSON.stringify(responseBody));
+      return res.json(responseBody);
     }
 
-    const prompt = `Analise os registros DNS para o domínio "${domain}" no serviço FreeMail Hub.
-    
-    Registros atuais:
-    ${JSON.stringify(records, null, 2)}
-    
-    Retorne um diagnóstico JSON com:
-    - overallScore (0-100)
-    - statusSummary
-    - diagnostics (array com MX, SPF, DKIM, DMARC)
-    - isOk (boolean)
-    - quickActionInstructions
-    - providerNote
-    
-    Seja claro, otimista e prático. Use português.`;
+    const prompt = `Analiza detenidamente la configuración de registros DNS corporativos para la plataforma de correo "FreeMail Hub" bajo el dominio "${cleanDomain}".
+Proveedor de DNS ingresado por el usuario: ${provider || "Cloudflare / GoDaddy / General"}
 
+Registros de estado actuales que se detectaron en los DNS:
+${JSON.stringify(records, null, 2)}
+
+Tu objetivo consiste en devolver un diagnóstico completo, optimista, sumamente didáctico y futurista en formato JSON con la solución exacta en español estructurada paso a paso para que el usuario añada los registros esperados sin ninguna confusión técnica.`;
+
+    console.log("[DEBUG/DNS] Solicitando diagnóstico real a Gemini...");
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-exp",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
-        systemInstruction: "Você é um especialista em DNS e emails. Dê diagnósticos claros e acionáveis.",
-        responseMimeType: "application/json"
+        systemInstruction: "Eres el Asesor Quántico de Correo y Administrador Experto de Redes de FreeMail Hub. Ayudas a los usuarios a activar sus correos personales resolviendo problemas de registros DNS (MX, SPF, DKIM, DMARC) de forma didáctica, futurista, alentadora y visualmente de vanguardia.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            domainName: { type: "STRING" },
+            overallScore: { type: "INTEGER", description: "Puntaje general de salud de DNS del dominio (de 0 a 100)" },
+            statusSummary: { type: "STRING", description: "Resumen integrador del estado actual del dominio enfocado al futuro." },
+            diagnostics: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  recordType: { type: "STRING" },
+                  status: { type: "STRING" },
+                  currentValue: { type: "STRING" },
+                  expectedValue: { type: "STRING" },
+                  criticality: { type: "STRING" },
+                  analysis: { type: "STRING", description: "Explicación breve del error o estado actual en español." },
+                  actionSteps: {
+                    type: "ARRAY",
+                    items: { type: "STRING" },
+                    description: "Pasos explícitos para resolver la falla desde el panel del registrador."
+                  }
+                },
+                required: ["recordType", "status", "currentValue", "expectedValue", "criticality", "analysis", "actionSteps"]
+              }
+            },
+            isOk: { type: "BOOLEAN" },
+            quickActionInstructions: { type: "STRING", description: "Plan de acción consolidado en una oración." },
+            providerNote: { type: "STRING", description: "Consejos para su proveedor (como desactivar proxy naranja en Cloudflare, revisar TTL, etc.)" }
+          },
+          required: ["domainName", "overallScore", "statusSummary", "diagnostics", "isOk", "quickActionInstructions", "providerNote"]
+        }
       }
     });
 
-    const text = response.text;
-    if (!text) throw new Error("Resposta vazia da IA");
+    const outputText = response.text;
+    if (!outputText) {
+      throw new Error("No se obtuvo respuesta del motor de IA.");
+    }
 
-    const data = JSON.parse(text.trim());
-    
-    return res.json({
+    console.log("[DEBUG/DNS] Respuesta cruda de Gemini obtenida con éxito.");
+    const aiData = JSON.parse(outputText.trim());
+    const responseBody = {
       success: true,
-      analysis: data
-    });
+      analysis: aiData
+    };
+    console.log("[DEBUG/DNS] Enviando respuesta JSON analítica final.");
+    return res.json(responseBody);
 
   } catch (error: any) {
-    console.error("[DNS] Erro na IA, usando fallback:", error.message);
-    
-    return res.json({
+    console.error("[DEBUG/DNS] Falla en consulta real de IA o parseo. Entrando en modo Diagnóstico Resiliente de IA de Respaldo:", error);
+    const responseBody = {
       success: true,
-      analysis: generateFallback()
-    });
+      analysis: generateFallbackResponse()
+    };
+    console.log("[DEBUG/DNS] Enviando respuesta de respaldo (fallback exitoso) tras error.");
+    return res.json(responseBody);
   }
 });
 
-/**
- * GET /api/dns/health
- * Health check do serviço DNS
- */
-router.get("/health", (req: Request, res: Response) => {
-  res.json({
-    status: "ok",
-    service: "dns-verification",
-    version: "2.0.0",
-    timestamp: new Date().toISOString(),
-    features: ["MX", "SPF", "DKIM", "DMARC", "DoH Fallback"]
-  });
-});
-
-// ==========================================
-// MIDDLEWARE DE ERRO
-// ==========================================
+// Middleware de manejo de errores específico del enrutador DNS
 router.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  console.error("[DNS] Middleware de erro:", err);
-  
-  res.status(500).json({
+  console.error("[DEBUG/DNS] [MIDDLEWARE-ERROR] Error interceptado en el enrutamiento de DNS:", err);
+  return res.status(500).json({
     success: false,
-    error: "Erro interno no serviço DNS",
+    error: "Ocurrió una falla inesperada en el servicio interno de DNS",
     details: err.message || String(err),
     domainName: req.body?.domainName || req.body?.domain || ""
   });
