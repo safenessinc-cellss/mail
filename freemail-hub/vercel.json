@@ -1,13 +1,20 @@
 {
   "version": 2,
-  "rewrites": [
+  "functions": {
+    "server.ts": {
+      "memory": 1024,
+      "maxDuration": 30,  // AUMENTADO para 30 segundos
+      "runtime": "nodejs@18.x"
+    }
+  },
+  "routes": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index.ts"
+      "src": "/api/(.*)",
+      "dest": "server.ts"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "/(.*)",
+      "dest": "server.ts"
     }
   ]
 }
