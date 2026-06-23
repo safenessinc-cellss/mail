@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "tsc --project tsconfig.server.json",
+    "build": "node vercel-build.js",
+    "vercel-build": "node vercel-build.js",
     "start": "node dist/server.js"
   },
   "dependencies": {
