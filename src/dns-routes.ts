@@ -1,5 +1,4 @@
 import express, { Request, Response, Router, NextFunction } from "express";
-import dns from "dns";
 import { GoogleGenAI } from "@google/genai";
 
 const router: Router = express.Router();
@@ -37,6 +36,24 @@ function getGeminiClient(): GoogleGenAI | null {
 const EXPECTED_MX = "10 mx1.hostinger.com y 10 mx2.hostinger.com";
 const EXPECTED_SPF = "v=spf1 include:spf.hostinger.com ~all";
 
+// Función con timeout genérico para asegurar que no nos bloqueemos en serverless
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, defaultValue: T): Promise<T> {
+  let timeoutId: NodeJS.Timeout;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timeoutId = setTimeout(() => {
+      console.warn(`[TIMEOUT] DNS operation timed out after ${timeoutMs}ms.`);
+      resolve(defaultValue);
+    }, timeoutMs);
+  });
+  return Promise.race([
+    promise.then((res) => {
+      clearTimeout(timeoutId);
+      return res;
+    }),
+    timeoutPromise
+  ]);
+}
+
 // Función auxiliar para consultar DNS sobre HTTPS (DoH) como fallback ultra-estable
 async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
   console.log(`[DEBUG/DNS-DoH] Buscando registro ${type} para: ${name}`);
@@ -48,7 +65,7 @@ async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
   for (const url of providers) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4500);
+      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 segundos máx por proveedor
 
       const response = await fetch(url, {
         headers: { "accept": "application/dns-json" },
@@ -84,21 +101,13 @@ async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
   return [];
 }
 
-// Resolver MX robusto (Primero nativo, luego fallback DoH)
+// Resolver MX robusto codificado puramente sobre HTTPS (DoH) para máxima compatibilidad con contenedores y serverless
 async function resolveMxSecurely(domain: string): Promise<{ priority: number; exchange: string }[]> {
+  console.log(`[DEBUG/DNS-MX] Iniciando resolución MX vía DoH para: ${domain}`);
   try {
-    console.log(`[DEBUG/DNS-MX] Buscando MX de forma nativa para: ${domain}`);
-    return await new Promise((resolve, reject) => {
-      dns.resolveMx(domain, (err, records) => {
-        if (err) return reject(err);
-        resolve(records || []);
-      });
-    });
-  } catch (err: any) {
-    console.warn(`[DEBUG/DNS-MX] Consulta MX nativa falló para ${domain}, usando fallback DoH. Error:`, err.message);
-    try {
-      const answers = await resolveDnsViaDoH(domain, "MX");
-      return answers.map(ans => {
+    const answers = await withTimeout(resolveDnsViaDoH(domain, "MX"), 2500, []);
+    if (answers && answers.length > 0) {
+      const records = answers.map(ans => {
         const parts = ans.trim().split(/\s+/);
         if (parts.length >= 2) {
           return {
@@ -109,33 +118,29 @@ async function resolveMxSecurely(domain: string): Promise<{ priority: number; ex
           return { priority: 10, exchange: ans.replace(/\.$/, "") };
         }
       });
-    } catch (dohErr: any) {
-      console.error(`[DEBUG/DNS-MX] Fallback DoH MX falló para ${domain}:`, dohErr.message);
-      throw err; // Lanzar error original
+      console.log(`[DEBUG/DNS-MX] Resuelto MX vía DoH con éxito:`, records);
+      return records;
     }
+  } catch (err: any) {
+    console.warn(`[DEBUG/DNS-MX] Error en resolución DoH de MX:`, err.message);
   }
+  return [];
 }
 
-// Resolver TXT robusto (Primero nativo, luego fallback DoH)
+// Resolver TXT robusto codificado puramente sobre HTTPS (DoH) para máxima compatibilidad con contenedores y serverless
 async function resolveTxtSecurely(domain: string): Promise<string[][]> {
+  console.log(`[DEBUG/DNS-TXT] Iniciando resolución TXT vía DoH para: ${domain}`);
   try {
-    console.log(`[DEBUG/DNS-TXT] Buscando TXT de forma nativa para: ${domain}`);
-    return await new Promise((resolve, reject) => {
-      dns.resolveTxt(domain, (err, records) => {
-        if (err) return reject(err);
-        resolve(records || []);
-      });
-    });
-  } catch (err: any) {
-    console.warn(`[DEBUG/DNS-TXT] Consulta TXT nativa falló para ${domain}, usando fallback DoH. Error:`, err.message);
-    try {
-      const answers = await resolveDnsViaDoH(domain, "TXT");
-      return answers.map(ans => [ans]);
-    } catch (dohErr: any) {
-      console.error(`[DEBUG/DNS-TXT] Fallback DoH TXT falló para ${domain}:`, dohErr.message);
-      throw err;
+    const answers = await withTimeout(resolveDnsViaDoH(domain, "TXT"), 2500, []);
+    if (answers && answers.length > 0) {
+      const records = answers.map(ans => [ans]);
+      console.log(`[DEBUG/DNS-TXT] Resuelto TXT vía DoH con éxito para ${domain}`);
+      return records;
     }
+  } catch (err: any) {
+    console.warn(`[DEBUG/DNS-TXT] Error en resolución DoH de TXT:`, err.message);
   }
+  return [];
 }
 
 // POST /api/dns/verify
@@ -160,14 +165,33 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     const domain = domainParam.trim().toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, "");
     console.log(`[DEBUG/DNS] Procesando verificación para el dominio limpio: ${domain}`);
 
+    // Resoluciones en paralelo para asegurar respuesta ultra-rápida y evitar límites de timeout de ejecución en serverless (como Vercel)
+    const [mxRecords, spfTxtRecords, dkimTxtRecords, dmarcTxtRecords] = await Promise.all([
+      resolveMxSecurely(domain).catch(err => {
+        console.warn("[DEBUG/DNS-API] Error MX atrapado de forma paralela:", err.message);
+        return [];
+      }),
+      resolveTxtSecurely(domain).catch(err => {
+        console.warn("[DEBUG/DNS-API] Error SPF atrapado de forma paralela:", err.message);
+        return [];
+      }),
+      resolveTxtSecurely(`default._domainkey.${domain}`).catch(err => {
+        console.warn("[DEBUG/DNS-API] Error DKIM atrapado de forma paralela:", err.message);
+        return [];
+      }),
+      resolveTxtSecurely(`_dmarc.${domain}`).catch(err => {
+        console.warn("[DEBUG/DNS-API] Error DMARC atrapado de forma paralela:", err.message);
+        return [];
+      })
+    ]);
+
     // 1. Verificación MX
     let mxStatus = "failed";
     let mxCurrentValue = "";
     try {
-      const records = await resolveMxSecurely(domain);
-      if (records && records.length > 0) {
-        mxCurrentValue = records.map(r => `${r.priority} ${r.exchange}`).join(", ");
-        const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && (
+      if (mxRecords && mxRecords.length > 0) {
+        mxCurrentValue = mxRecords.map(r => `${r.priority} ${r.exchange}`).join(", ");
+        const configured = mxRecords.some(r => r && r.exchange && typeof r.exchange === "string" && (
           r.exchange.toLowerCase().includes("hostinger.com") || 
           r.exchange.toLowerCase().includes("hostinger.es") || 
           r.exchange.toLowerCase().includes("hostinger.mx")
@@ -184,8 +208,7 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     let spfStatus = "failed";
     let spfCurrentValue = "";
     try {
-      const txtRecords = await resolveTxtSecurely(domain);
-      const flattened = txtRecords.flat();
+      const flattened = spfTxtRecords ? spfTxtRecords.flat() : [];
       const spfText = flattened.find(record => record && typeof record === "string" && record.startsWith("v=spf1"));
       if (spfText) {
         spfCurrentValue = spfText;
@@ -202,9 +225,7 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     let dkimStatus = "failed";
     let dkimCurrentValue = "";
     try {
-      const dkimDomain = `default._domainkey.${domain}`;
-      const txtRecords = await resolveTxtSecurely(dkimDomain);
-      const flattened = txtRecords.flat();
+      const flattened = dkimTxtRecords ? dkimTxtRecords.flat() : [];
       const dkimText = flattened.find(record => record && typeof record === "string" && (record.startsWith("v=DKIM1") || record.includes("k=rsa")));
       if (dkimText) {
         dkimCurrentValue = dkimText;
@@ -220,9 +241,7 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     let dmarcStatus = "failed";
     let dmarcCurrentValue = "";
     try {
-      const dmarcDomain = `_dmarc.${domain}`;
-      const txtRecords = await resolveTxtSecurely(dmarcDomain);
-      const flattened = txtRecords.flat();
+      const flattened = dmarcTxtRecords ? dmarcTxtRecords.flat() : [];
       const dmarcText = flattened.find(record => record && typeof record === "string" && (record.startsWith("v=DMARC1") || record.includes("p=")));
       if (dmarcText) {
         dmarcCurrentValue = dmarcText;

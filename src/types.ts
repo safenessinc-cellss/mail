@@ -34,6 +34,7 @@ export interface Domain {
   dkimRecord: DNSRecord;
   dmarcRecord: DNSRecord;
   customRecords?: CustomDNSRecord[];
+  smtpBypassEnabled?: boolean;
 }
 
 export interface EmailAlias {
