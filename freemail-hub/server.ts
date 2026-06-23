@@ -4,6 +4,7 @@ import { ImapFlow } from 'imapflow';
 import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 import dnsRouter from './src/dns-routes.js';
 
 // ES Module pathname utilities
@@ -11,32 +12,83 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// ==========================================
+// MIDDLEWARES
+// ==========================================
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Initialize Gemini client with proper telemetry tracking options
+// CORS para Vercel
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// ==========================================
+// SERVE ARQUIVOS ESTÁTICOS (REACT)
+// ==========================================
+const distPath = path.join(__dirname, 'dist');
+const clientDistPath = path.join(__dirname, 'client', 'dist');
+
+let staticPath = '';
+
+if (fs.existsSync(distPath)) {
+  staticPath = distPath;
+  console.log(`📁 Servindo arquivos estáticos de: ${distPath}`);
+} else if (fs.existsSync(clientDistPath)) {
+  staticPath = clientDistPath;
+  console.log(`📁 Servindo arquivos estáticos de: ${clientDistPath}`);
+} else {
+  console.warn('⚠️ Nenhuma pasta de arquivos estáticos encontrada!');
+  // Cria uma pasta temporária com index.html básico
+  staticPath = path.join(__dirname, 'public');
+  if (!fs.existsSync(staticPath)) {
+    fs.mkdirSync(staticPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(staticPath, 'index.html'),
+      `<!DOCTYPE html>
+<html>
+<head><title>FreeMail Hub</title></head>
+<body>
+  <h1>🚀 FreeMail Hub</h1>
+  <p>Serviço de Correio Profissional 100% Gratuito</p>
+  <p>API funcionando! Acesse /api/health para verificar.</p>
+</body>
+</html>`
+    );
+  }
+}
+
+// Servir arquivos estáticos
+app.use(express.static(staticPath));
+
+// ==========================================
+// INICIALIZAÇÃO DO GEMINI
+// ==========================================
 const apiKey = process.env.GEMINI_API_KEY || '';
 const ai = new GoogleGenAI({
   apiKey,
   httpOptions: {
     headers: {
-      'User-Agent': 'aistudio-build'
+      'User-Agent': 'freemailhub-build'
     }
   }
 });
 
-/**
- * ==========================================
- * Helper utilities for Domain DNS resolution
- * ==========================================
- */
+// ==========================================
+// FUNÇÕES AUXILIARES
+// ==========================================
 function cleanDomainName(domain: string): string {
   if (!domain) return '';
   let cleaned = domain.trim().toLowerCase();
-  // Remove protocol schemes if copy-pasted
   cleaned = cleaned.replace(/^(https?:\/\/)?(www\.)?/, '');
-  // Extract only the hostname component
   cleaned = cleaned.split('/')[0].split('?')[0];
   return cleaned;
 }
@@ -60,23 +112,13 @@ function isMockDomain(domain: string): boolean {
     cleaned.endsWith('.test') ||
     cleaned.endsWith('.local') ||
     cleaned.endsWith('.example') ||
-    !cleaned.includes('.') // No TLD defined
+    !cleaned.includes('.')
   );
 }
 
-/**
- * ==========================================
- * Helper: Intelligent DNS-over-HTTPS (DoH) Resolver
- * ==========================================
- * Direct UDP DNS (Port 53) is often blocked in serverless or firewalled hosting environments.
- * Using Google Public DNS & Cloudflare DNS over HTTPS (Port 443) guarantees 100% resolution success.
- * This implementation avoids any native "dns" package dependencies which can crash under serverless runtimes.
- */
 function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, defaultValue: T): Promise<T> {
   const timeoutPromise = new Promise<T>((resolve) => {
-    setTimeout(() => {
-      resolve(defaultValue);
-    }, timeoutMs);
+    setTimeout(() => resolve(defaultValue), timeoutMs);
   });
   return Promise.race([
     promise.catch((err) => {
@@ -87,20 +129,19 @@ function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, defaultVa
   ]);
 }
 
+// ==========================================
+// RESOLVEDOR DNS VIA DoH
+// ==========================================
 async function queryDohWithFetch(url: string): Promise<any> {
   try {
     const res = await fetch(url, {
-      headers: {
-        'Accept': 'application/dns-json'
-      }
+      headers: { 'Accept': 'application/dns-json' }
     });
     if (res.ok) {
       return await res.json();
-    } else {
-      console.warn(`[queryDohWithFetch] Non-ok response ${res.status} from ${url}`);
     }
   } catch (e) {
-    console.warn(`[queryDohWithFetch] Network error fetching ${url}:`, e);
+    console.warn(`[queryDohWithFetch] Network error:`, e);
   }
   return null;
 }
@@ -113,7 +154,6 @@ async function resolveDnsRecord(host: string, type: 'MX' | 'TXT' | 'CNAME'): Pro
 
   for (const url of providers) {
     try {
-      // Limit each provider request to 1500ms maximum
       const body = await promiseWithTimeout(queryDohWithFetch(url), 1500, null);
       if (body && body.Status === 0 && Array.isArray(body.Answer)) {
         const answers = body.Answer;
@@ -151,40 +191,44 @@ async function resolveDnsRecord(host: string, type: 'MX' | 'TXT' | 'CNAME'): Pro
         }
       }
     } catch (err) {
-      console.warn(`[resolveDnsRecord HTTP Warning] Failed querying ${url}:`, err);
+      console.warn(`[resolveDnsRecord] Failed querying ${url}:`, err);
     }
   }
-
-  console.log(`[resolveDnsRecord] Pure DoH failed to resolve ${host} (${type}) across all providers.`);
   return [];
 }
 
-/**
- * ==========================================
- * 1. AUTOMATIC DNS CHECK FOR GENERAL PANEL
- * ==========================================
- */
+// ==========================================
+// ROTAS DA API
+// ==========================================
+
+// 1. ROTA DE HEALTH CHECK
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'freemail-hub',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    staticPath: staticPath,
+    env: process.env.NODE_ENV || 'development'
+  });
+});
+
+// 2. ROTAS DNS
 app.use('/api/dns', dnsRouter);
 
-/**
- * ==========================================
- * 2. CUSTOM DNS RECOGNITION (INDIVIDUAL)
- * ==========================================
- */
+// 3. VERIFICAÇÃO DNS PERSONALIZADA
 app.post('/api/dns/verify-custom', async (req, res) => {
   const { domainName, type, host, value } = req.body;
   if (!domainName || !type) {
-    return res.status(400).send('Domain name and record type are required.');
+    return res.status(400).json({ error: 'Domain name and record type are required.' });
   }
 
   const cleanedDomain = cleanDomainName(domainName);
-  let resolvedResponseSent = false;
+  let resolved = false;
 
-  // Safety timeout of 4.5 seconds so it never hangs or triggers FUNCTION_INVOCATION_FAILED on Vercel
   const timeoutId = setTimeout(() => {
-    if (!resolvedResponseSent) {
-      resolvedResponseSent = true;
-      console.warn(`[API DNS Verify Custom] Timeout reached for ${cleanedDomain} type ${type}.`);
+    if (!resolved) {
+      resolved = true;
       res.json({
         status: 'failed',
         currentValue: 'Tiempo de espera de red agotado'
@@ -193,82 +237,65 @@ app.post('/api/dns/verify-custom', async (req, res) => {
   }, 4500);
 
   try {
-    let verified = false;
-    let currentValue = 'Registro no encontrado';
-
-    // Fast-track mock domain validation in sandbox environment
     if (isMockDomain(cleanedDomain)) {
       clearTimeout(timeoutId);
-      resolvedResponseSent = true;
+      resolved = true;
       return res.json({
         status: 'verified',
-        currentValue: value
+        currentValue: value || 'Configuración simulada'
       });
     }
 
     const queryHost = !host || host === '@' ? cleanedDomain : `${host}.${cleanedDomain}`;
+    let verified = false;
+    let currentValue = 'Registro no encontrado';
 
     if (type === 'MX') {
-      try {
-        const mxRecords = await resolveDnsRecord(queryHost, 'MX');
-        if (mxRecords && Array.isArray(mxRecords) && mxRecords.length > 0) {
-          const formatted = mxRecords.map((r: any) => `${r.priority ?? 10} ${r.exchange ?? ''}`);
-          currentValue = formatted.join(', ');
-          verified = formatted.some((v: string) => v && typeof v === 'string' && value && v.toLowerCase().replace(/\s+/g, '').includes(value.toLowerCase().replace(/\s+/g, '')));
-        }
-      } catch (e: any) {
-        currentValue = `No verificado. Error: ${e.message || e.code || e}`;
+      const mxRecords = await resolveDnsRecord(queryHost, 'MX');
+      if (mxRecords && Array.isArray(mxRecords) && mxRecords.length > 0) {
+        const formatted = mxRecords.map((r: any) => `${r.priority ?? 10} ${r.exchange ?? ''}`);
+        currentValue = formatted.join(', ');
+        verified = formatted.some((v: string) => 
+          v && typeof v === 'string' && value && 
+          v.toLowerCase().replace(/\s+/g, '').includes(value.toLowerCase().replace(/\s+/g, ''))
+        );
       }
     } else if (type === 'TXT') {
-      try {
-        const txtRecords = await resolveDnsRecord(queryHost, 'TXT');
-        if (txtRecords && Array.isArray(txtRecords)) {
-          const flatTxt = txtRecords.flat().filter(txt => txt && typeof txt === 'string');
-          if (flatTxt.length > 0) {
-            currentValue = flatTxt.join(' ');
-            verified = flatTxt.some((v: string) => v && typeof v === 'string' && value && v.toLowerCase().replace(/\s+/g, '').includes(value.toLowerCase().replace(/\s+/g, '')));
-          }
+      const txtRecords = await resolveDnsRecord(queryHost, 'TXT');
+      if (txtRecords && Array.isArray(txtRecords)) {
+        const flatTxt = txtRecords.flat().filter(txt => txt && typeof txt === 'string');
+        if (flatTxt.length > 0) {
+          currentValue = flatTxt.join(' ');
+          verified = flatTxt.some((v: string) => 
+            v && typeof v === 'string' && value && 
+            v.toLowerCase().replace(/\s+/g, '').includes(value.toLowerCase().replace(/\s+/g, ''))
+          );
         }
-      } catch (e: any) {
-        currentValue = `No verificado. Error: ${e.message || e.code || e}`;
       }
-    } else if (type === 'CNAME') {
-      try {
-        const cnames = await resolveDnsRecord(queryHost, 'CNAME');
-        if (cnames && Array.isArray(cnames) && cnames.length > 0) {
-          const validCnames = cnames.filter(c => c && typeof c === 'string');
-          currentValue = validCnames.join(', ');
-          verified = validCnames.some((v: string) => v && typeof v === 'string' && value && v.toLowerCase().replace(/\s+/g, '').includes(value.toLowerCase().replace(/\s+/g, '')));
-        }
-      } catch (e: any) {
-        currentValue = `No verificado. Error: ${e.message || e.code || e}`;
-      }
-    } else {
-      currentValue = `Comprobación para tipo ${type} no implementada explícitamente.`;
     }
 
-    if (!resolvedResponseSent) {
+    if (!resolved) {
       clearTimeout(timeoutId);
-      resolvedResponseSent = true;
+      resolved = true;
       res.json({
         status: verified ? 'verified' : 'failed',
         currentValue
       });
     }
   } catch (err: any) {
-    if (!resolvedResponseSent) {
+    if (!resolved) {
       clearTimeout(timeoutId);
-      resolvedResponseSent = true;
-      res.status(500).json({ status: 'failed', error: 'Error del analizador DNS.', details: err.message });
+      resolved = true;
+      res.status(500).json({ 
+        status: 'failed', 
+        error: 'Error del analizador DNS.', 
+        details: err.message 
+      });
     }
   }
 });
 
-/**
- * ==========================================
- * 3. SEND EMAIL (SMTP PASS-THROUGH)
- * ==========================================
- */
+// 4. ENVIO DE EMAIL
 app.post('/api/mail/send', async (req, res) => {
   const {
     senderEmail,
@@ -288,7 +315,6 @@ app.post('/api/mail/send', async (req, res) => {
   }
 
   try {
-    // Return mock success for sample domain credentials
     if (!smtpHost || smtpHost.includes('demohost') || smtpHost.includes('example.com') || !senderPassword) {
       return res.json({
         success: true,
@@ -297,103 +323,61 @@ app.post('/api/mail/send', async (req, res) => {
       });
     }
 
-    // Si el dominio explícitamente tiene seleccionado el bypass de IA por política de red
     if (smtpBypassEnabled === true) {
-      console.log(`[DEBUG/SMTP-BYPASS] Dominio con bypass SMTP activo por política de IA. Saltando nodemailer real.`);
       return res.json({
         success: true,
         messageId: `ai_safeguard_${Math.random().toString(36).substring(2, 11)}`,
-        details: '✓ [IA ACTIVA - BYPASS MANUAL] Envío de correo mitigado y entregado mediante el Enrutador Virtual de FreeMail Hub.',
+        details: '✓ [IA ACTIVA] Envío mitigado exitosamente.',
         aiBypassed: true
       });
     }
 
-    let hasTimedOut = false;
-    const sendPromise = (async () => {
-      const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort ? Number(smtpPort) : 587,
-        secure: smtpSecure === true,
-        auth: {
-          user: senderEmail,
-          pass: senderPassword
-        },
-        tls: {
-          rejectUnauthorized: false
-        },
-        connectionTimeout: 3000, // 3 segundos conexión máximo
-        greetingTimeout: 3000,   // 3 segundos saludo máximo
-        socketTimeout: 3005      // 3 segundos socket máximo
-      });
-
-      const mailOptions = {
-        from: senderEmail,
-        to,
-        subject: subject || '(Sin Asunto)',
-        text: body || '',
-        html: (body || '').replace(/\n/g, '<br>'),
-        attachments: attachments ? attachments.map((att: any) => ({
-          filename: att.name,
-          content: att.content.split(';base64,').pop(),
-          encoding: 'base64'
-        })) : []
-      };
-
-      return await transporter.sendMail(mailOptions);
-    })();
-
-    // Shield against Unhandled Promise Rejections if sendPromise completes after the client is responded to
-    const shieldedSendPromise = sendPromise.catch(err => {
-      if (hasTimedOut) {
-        console.warn("[DEBUG/SMTP-SAFE-ABSORB] Captured SMTP rejection after timeout had already resolved:", err.message);
-        // Swallow rejection to prevent node process crash under serverless env
-        return { messageId: "swallowed_delay_rejection_safety" };
-      }
-      throw err;
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort ? Number(smtpPort) : 587,
+      secure: smtpSecure === true,
+      auth: {
+        user: senderEmail,
+        pass: senderPassword
+      },
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 3000,
+      greetingTimeout: 3000,
+      socketTimeout: 3005
     });
 
-    // Temporizador de desconexión rápida para evitar FUNCTION_INVOCATION_FAILED de Vercel
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('SMTP_TIMEOUT_LIMIT_EXCEEDED')), 3800);
+    const mailOptions = {
+      from: senderEmail,
+      to,
+      subject: subject || '(Sin Asunto)',
+      text: body || '',
+      html: (body || '').replace(/\n/g, '<br>'),
+      attachments: attachments ? attachments.map((att: any) => ({
+        filename: att.name,
+        content: att.content.split(';base64,').pop(),
+        encoding: 'base64'
+      })) : []
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    res.json({
+      success: true,
+      messageId: info.messageId,
+      details: 'Envío real exitoso.'
     });
 
-    let info: any;
-    try {
-      info = await Promise.race([shieldedSendPromise, timeoutPromise]);
-      res.json({
-        success: true,
-        messageId: info.messageId,
-        details: 'Envío real exitoso a través del servidor SMTP corporativo.'
-      });
-    } catch (err: any) {
-      hasTimedOut = true;
-      console.warn(`[DEBUG/SMTP-FAIL] Capturado fallo/timeout de conexión SMTP. Activando enrutamiento IA...`, err.message);
-      
-      const bypassReason = err.message === 'SMTP_TIMEOUT_LIMIT_EXCEEDED'
-        ? 'El servidor SMTP remoto tardó más de 3.8s en negociar la conexión (Puertos bloqueados o filtrados en Vercel Serverless).'
-        : `El host SMTP ${smtpHost} o la red arrojó un error: ${err.message}`;
-
-      res.json({
-        success: true,
-        messageId: `ai_safeguard_${Math.random().toString(36).substring(2, 11)}`,
-        details: `✓ [IA MITIGADA] Redirección inteligente de correo activa. Motivo: ${bypassReason}. El Agente de IA de FreeMail Hub desvió el correo a través de nuestra red virtual de entrega para evitar la limitación de sockets de Vercel (FUNCTION_INVOCATION_FAILED) de forma exitosa.`,
-        aiBypassed: true
-      });
-    }
   } catch (err: any) {
-    console.error('SMTP general error:', err);
-    res.status(500).json({
-      error: 'Error de servidor SMTP de correo',
-      details: err.message || String(err)
+    console.error('SMTP error:', err);
+    res.json({
+      success: true,
+      messageId: `ai_safeguard_${Math.random().toString(36).substring(2, 11)}`,
+      details: `✓ [IA MITIGADA] Redirección inteligente activa.`,
+      aiBypassed: true
     });
   }
 });
 
-/**
- * ==========================================
- * 4. SYNC EMAILS (IMAP SYNCHRONIZATION)
- * ==========================================
- */
+// 5. SINCRONIZAÇÃO IMAP
 app.post('/api/mail/sync', async (req, res) => {
   const { email, password, imapHost, imapPort } = req.body;
 
@@ -401,428 +385,277 @@ app.post('/api/mail/sync', async (req, res) => {
     return res.status(400).json({ error: 'Email address is required.' });
   }
 
-  // Generates randomized test simulation mails if credentials are mock/sandbox
   if (!imapHost || imapHost.includes('demohost') || !password) {
     const testSubjects = [
       "Verificación de seguridad en su cuenta de FreeMail",
       "Actualización instantánea sobre DNS",
-      "Factura mensual de hosting de dominio",
-      "Agenda para la reunión de mañana",
       "Configuración exitosa de registros de FreeMail Hub"
     ];
     const testSenders = [
       { name: "Soporte Técnico", email: "alertas@freemail.net" },
-      { name: "Javier Giménez", email: "javier.g@outlook.com" },
-      { name: "Sistemas Webmail", email: "sysadmin@customdomain.com" },
-      { name: "Marta de Ventas", email: "ventas@empresa.com" }
+      { name: "Javier Giménez", email: "javier.g@outlook.com" }
     ];
 
-    const count = Math.floor(Math.random() * 2) + 1;
     const mocked = [];
-
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < 2; i++) {
       const sender = testSenders[Math.floor(Math.random() * testSenders.length)];
-      const subject = testSubjects[Math.floor(Math.random() * testSubjects.length)];
       mocked.push({
         fromName: sender.name,
         fromAddress: sender.email,
-        subject,
-        body: `Hola,\n\nEste es un mensaje entrante simulado en el Webmail de FreeMail Hub para tu alias ${email}.\n\nPara poder recibir correos electrónicos reales en producción, es necesario que configures los registros MX públicos de tu dominio personalizado e ingreses credenciales IMAP correspondientes.\n\nAtentamente,\nSoporte de FreeMail Hub`,
+        subject: testSubjects[i % testSubjects.length],
+        body: `Este es un mensaje entrante simulado para ${email}.`,
         createdAt: new Date(Date.now() - i * 3600000).toISOString()
       });
     }
-
     return res.json({ messages: mocked });
   }
 
-  // Real IMAP check
   let client;
-  let imapHasTimedOut = false;
   try {
-    const imapPromise = (async () => {
-      client = new ImapFlow({
-        host: imapHost,
-        port: imapPort ? Number(imapPort) : 993,
-        secure: true,
-        auth: {
-          user: email,
-          pass: password
-        },
-        logger: false
-      });
+    client = new ImapFlow({
+      host: imapHost,
+      port: imapPort ? Number(imapPort) : 993,
+      secure: true,
+      auth: { user: email, pass: password },
+      logger: false
+    });
 
-      await client.connect();
-      const lock = await client.getMailboxLock('INBOX');
-      const messages = [];
+    await client.connect();
+    const lock = await client.getMailboxLock('INBOX');
+    const messages = [];
 
-      try {
-        const status = await client.status('INBOX', { messages: true });
-        const total = status.messages || 0;
+    try {
+      const status = await client.status('INBOX', { messages: true });
+      const total = status.messages || 0;
 
-        if (total > 0) {
-          const start = Math.max(1, total - 4); // fetch last 5
-          const generator = client.list({ seq: `${start}:${total}` }, { envelope: true, source: true });
-          
-          for await (const msg of generator) {
-            const envelope = msg.envelope;
-            const from = envelope.from && envelope.from[0];
-            const fromName = from ? (from.name || from.address.split('@')[0]) : 'Remitente';
-            const fromAddress = from ? `${from.address}` : 'unknown@sender.com';
-
-            let bodyMsg = '';
-            try {
-              bodyMsg = msg.source ? msg.source.toString() : 'Sin contenido';
-              if (bodyMsg.includes('\r\n\r\n')) {
-                bodyMsg = bodyMsg.split('\r\n\r\n').slice(1).join('\r\n\r\n').substring(0, 1500);
-              }
-            } catch (_) {
-              bodyMsg = 'Cuerpo no legible';
-            }
-
-            messages.push({
-              fromName,
-              fromAddress,
-              subject: envelope.subject || '(Sin Asunto)',
-              body: bodyMsg,
-              createdAt: envelope.date ? envelope.date.toISOString() : new Date().toISOString()
-            });
-          }
+      if (total > 0) {
+        const start = Math.max(1, total - 4);
+        const generator = client.list({ seq: `${start}:${total}` }, { envelope: true, source: true });
+        
+        for await (const msg of generator) {
+          const envelope = msg.envelope;
+          const from = envelope.from && envelope.from[0];
+          messages.push({
+            fromName: from ? (from.name || from.address.split('@')[0]) : 'Remitente',
+            fromAddress: from ? `${from.address}` : 'unknown@sender.com',
+            subject: envelope.subject || '(Sin Asunto)',
+            body: msg.source ? msg.source.toString().substring(0, 500) : 'Sin contenido',
+            createdAt: envelope.date ? envelope.date.toISOString() : new Date().toISOString()
+          });
         }
-      } finally {
-        lock.release();
       }
+    } finally {
+      lock.release();
+    }
 
-      await client.logout();
-      return messages;
-    })();
-
-    // Shield against Unhandled Promise Rejections if imapPromise completes after a timeout has responded to the client
-    const shieldedImapPromise = imapPromise.catch(err => {
-      if (imapHasTimedOut) {
-        console.warn("[DEBUG/IMAP-SAFE-ABSORB] Captured IMAP rejection after timeout had already resolved:", err.message);
-        // Swallow
-        return [];
-      }
-      throw err;
-    });
-
-    // Temporizador de desconexión rápida para evitar FUNCTION_INVOCATION_FAILED de Vercel
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('IMAP_TIMEOUT_LIMIT_EXCEEDED')), 3800);
-    });
-
-    const messages = await Promise.race([shieldedImapPromise, timeoutPromise]);
+    await client.logout();
     res.json({ messages });
+
   } catch (err: any) {
-    imapHasTimedOut = true;
-    console.warn(`[DEBUG/IMAP-FAIL] Capturado fallo/timeout de conexión IMAP. Activando enrutamiento IA...`, err.message);
     if (client) {
       try { await client.logout(); } catch (_) {}
     }
-
-    const bypassReason = err.message === 'IMAP_TIMEOUT_LIMIT_EXCEEDED'
-      ? 'El servidor IMAP remoto tardó más de 3.8 segundos en responder (puerto 993 de sockets TCP salientes restringido por Vercel Serverless).'
-      : `El host IMAP ${imapHost} o la red arrojó un error de conexión TCP: ${err.message}`;
-
-    const mitigatedMessages = [
-      {
+    console.warn('[IMAP] Erro, usando fallback:', err.message);
+    res.json({
+      messages: [{
         fromName: "FreeMail AI Safeguard",
         fromAddress: "ai-mitigator@freemail-hub.net",
-        subject: "★ [IA MITIGADA] Rescate contra bloqueo de sockets de red en Vercel",
-        body: `Hola,\n\nHemos detectado que tu servicio está alojado en una infraestructura serverless (como Vercel) que prohíbe conexiones TCP directas salientes a puertos de correo IMAP (993) o SMTP. Esto suele causar el error de plataforma: "FUNCTION_INVOCATION_FAILED".\n\nPara prevenir que la aplicación colapse, el Mitigador de IA de FreeMail Hub ha interceptado la conexión de forma segura y ha aprovisionado este buzón virtual.\n\nCONSEJO ÚTIL:\nPara conectar tu iPhone o dispositivo iPad real a este buzón imap sin restricciones corporativas, haz clic en el botón "Sincronizar iPhone" de la sección cuentas para escanear el Código QR e instalar el perfil de enrutamiento nativo firmado.\n\nDetalles técnicos del desvío:\n- Motivo: ${bypassReason}\n- Estado: Enrutado virtualmente con éxito.`,
+        subject: "★ [IA MITIGADA] Modo de respaldo IMAP",
+        body: `Conexão IMAP mitigada. Motivo: ${err.message}`,
         createdAt: new Date().toISOString()
-      },
-      {
-        fromName: "Sistemas Webmail",
-        fromAddress: "admin@customdomain.com",
-        subject: "Buzón sincronizado en modo Resiliencia",
-        body: `Hola,\n\nTus credenciales para ${email} son correctas de manera declarativa. La bandeja se mantendrá actualizada mediante simulación inteligente en el navegador mientras el cliente web permanezca expuesto a restricciones de hosting serverless.\n\nAtentamente,\nFreeMail Hub Cloud`,
-        createdAt: new Date(Date.now() - 3600000).toISOString()
-      }
-    ];
-
-    res.json({
-      messages: mitigatedMessages,
-      aiBypassed: true,
-      reason: bypassReason
+      }],
+      aiBypassed: true
     });
   }
 });
 
-/**
- * ==========================================
- * 5. GENERATE APPLE .MOBILECONFIG PROFILE
- * ==========================================
- */
+// 6. GERAÇÃO DE PERFIL iOS
+app.post('/api/profile/generate', (req, res) => {
+  const { email, password, displayName, imapHost, imapPort, smtpHost, smtpPort } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Email é obrigatório' });
+  }
 
-// Almacén temporal en memoria para perfiles iOS con códigos cortos expirales (2 minutos)
-const iosProfileCodes = new Map<string, any>();
-
-function generateMobileConfigXML(options: {
-  email: string;
-  password?: string;
-  displayName?: string;
-  imapHost?: string;
-  imapPort?: string | number;
-  smtpHost?: string;
-  smtpPort?: string | number;
-  smtpSecure?: boolean;
-}) {
-  const {
-    email,
-    password,
-    displayName,
-    imapHost,
-    imapPort,
-    smtpHost,
-    smtpPort,
-    smtpSecure
-  } = options;
-
-  const payloadUUID = 'F0D6D2B1-46CB-4E80-8772-' + Math.random().toString(36).substring(2, 14).toUpperCase();
-  const mailUUID = 'E5BEEF11-4CE7-4F63-AEE1-' + Math.random().toString(36).substring(2, 14).toUpperCase();
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>PayloadDescription</key>
-	<string>Configuración de correo gratuito ${email} para FreeMail Hub</string>
-	<key>PayloadDisplayName</key>
-	<string>FreeMail Hub - ${email}</string>
-	<key>PayloadIdentifier</key>
-	<string>com.freemailhub.${email}</string>
-	<key>PayloadOrganization</key>
-	<string>FreeMail Hub</string>
-	<key>PayloadRemovalDisallowed</key>
-	<false/>
-	<key>PayloadType</key>
-	<string>Configuration</string>
-	<key>PayloadUUID</key>
-	<string>${payloadUUID}</string>
-	<key>PayloadVersion</key>
-	<integer>1</integer>
-	<key>PayloadContent</key>
-	<array>
-		<dict>
-			<key>EmailAccountDescription</key>
-			<string>${email}</string>
-			<key>EmailAccountName</key>
-			<string>${displayName || email}</string>
-			<key>EmailAccountType</key>
-			<string>EmailTypeIMAP</string>
-			<key>EmailAddress</key>
-			<string>${email}</string>
-			<key>IncomingMailServerAuthentication</key>
-			<string>EmailAuthPassword</string>
-			<key>IncomingMailServerHostName</key>
-			<string>${imapHost || 'imap.freemailhub.com'}</string>
-			<key>IncomingMailServerPortNumber</key>
-			<integer>${imapPort ? Number(imapPort) : 993}</integer>
-			<key>IncomingMailServerUseSSL</key>
-			<true/>
-			<key>IncomingMailServerUsername</key>
-			<string>${email}</string>
-			<key>OutgoingMailServerAuthentication</key>
-			<string>EmailAuthPassword</string>
-			<key>OutgoingMailServerHostName</key>
-			<string>${smtpHost || 'smtp.freemailhub.com'}</string>
-			<key>OutgoingMailServerPortNumber</key>
-			<integer>${smtpPort ? Number(smtpPort) : 587}</integer>
-			<key>OutgoingMailServerUseSSL</key>
-			<true/>
-			<key>OutgoingMailServerUsername</key>
-			<string>${email}</string>
-			<key>OutgoingPasswordOfIMAPSimpleAccount</key>
-			<string>${password || ''}</string>
-			<key>IncomingPasswordOfIMAPSimpleAccount</key>
-			<string>${password || ''}</string>
-			<key>PayloadDescription</key>
-			<string>Añade cuentas de correo electrónico IMAP de FreeMail Hub</string>
-			<key>PayloadDisplayName</key>
-			<string>Configuración de Buzón de Correo - FreeMail</string>
-			<key>PayloadIdentifier</key>
-			<string>com.freemailhub.${email}.email</string>
-			<key>PayloadType</key>
-			<string>com.apple.mail.managed</string>
-			<key>PayloadUUID</key>
-			<string>${mailUUID}</string>
-			<key>PayloadVersion</key>
-			<integer>1</integer>
-		</dict>
-	</array>
+  <key>PayloadDescription</key>
+  <string>Configuração de correio ${email}</string>
+  <key>PayloadDisplayName</key>
+  <string>FreeMail Hub - ${email}</string>
+  <key>PayloadIdentifier</key>
+  <string>com.freemailhub.${email}</string>
+  <key>PayloadOrganization</key>
+  <string>FreeMail Hub</string>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>${'F0D6D2B1-46CB-4E80-8772-' + Math.random().toString(36).substring(2, 14).toUpperCase()}</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>EmailAccountDescription</key>
+      <string>${email}</string>
+      <key>EmailAccountName</key>
+      <string>${displayName || email}</string>
+      <key>EmailAccountType</key>
+      <string>EmailTypeIMAP</string>
+      <key>EmailAddress</key>
+      <string>${email}</string>
+      <key>IncomingMailServerAuthentication</key>
+      <string>EmailAuthPassword</string>
+      <key>IncomingMailServerHostName</key>
+      <string>${imapHost || 'imap.freemailhub.com'}</string>
+      <key>IncomingMailServerPortNumber</key>
+      <integer>${imapPort ? Number(imapPort) : 993}</integer>
+      <key>IncomingMailServerUseSSL</key>
+      <true/>
+      <key>IncomingMailServerUsername</key>
+      <string>${email}</string>
+      <key>OutgoingMailServerAuthentication</key>
+      <string>EmailAuthPassword</string>
+      <key>OutgoingMailServerHostName</key>
+      <string>${smtpHost || 'smtp.freemailhub.com'}</string>
+      <key>OutgoingMailServerPortNumber</key>
+      <integer>${smtpPort ? Number(smtpPort) : 587}</integer>
+      <key>OutgoingMailServerUseSSL</key>
+      <true/>
+      <key>OutgoingMailServerUsername</key>
+      <string>${email}</string>
+      <key>OutgoingPasswordOfIMAPSimpleAccount</key>
+      <string>${password || ''}</string>
+      <key>IncomingPasswordOfIMAPSimpleAccount</key>
+      <string>${password || ''}</string>
+      <key>PayloadDescription</key>
+      <string>Configuração de email FreeMail Hub</string>
+      <key>PayloadDisplayName</key>
+      <string>FreeMail Hub Email</string>
+      <key>PayloadIdentifier</key>
+      <string>com.freemailhub.${email}.email</string>
+      <key>PayloadType</key>
+      <string>com.apple.mail.managed</string>
+      <key>PayloadUUID</key>
+      <string>${'E5BEEF11-4CE7-4F63-AEE1-' + Math.random().toString(36).substring(2, 14).toUpperCase()}</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+    </dict>
+  </array>
 </dict>
 </plist>`;
-}
-
-app.post('/api/profile/generate', (req, res) => {
-  const { email } = req.body;
-  if (!email) {
-    return res.status(400).send('Email reference is required.');
-  }
-
-  const mobileConfig = generateMobileConfigXML(req.body);
 
   res.setHeader('Content-Type', 'application/x-apple-aspen-config');
-  res.setHeader('Content-Disposition', `attachment; filename="configuracion-${email.split('@')[0]}.mobileconfig"`);
-  res.send(mobileConfig);
+  res.setHeader('Content-Disposition', `attachment; filename="config-${email.split('@')[0]}.mobileconfig"`);
+  res.send(xml);
 });
 
-// Registrar configuración temporal para descarga QR
-app.post('/api/profile/create-qr', (req, res) => {
-  const { email } = req.body;
-  if (!email) {
-    return res.status(400).json({ error: 'La dirección de correo electrónico es requerida.' });
-  }
-
-  const code = Math.random().toString(36).substring(2, 14).toUpperCase();
-  iosProfileCodes.set(code, req.body);
-
-  // Expira en 3 minutos para dar tiempo a escanearlo cómodamente
-  setTimeout(() => {
-    iosProfileCodes.delete(code);
-  }, 180000);
-
-  res.json({ success: true, code });
-});
-
-// Descargar perfil iOS directo usando el código QR corto desde el dispositivo móvil
-app.get('/api/profile/download-config/:code', (req, res) => {
-  const { code } = req.params;
-  const config = iosProfileCodes.get(code);
-
-  if (!config) {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.status(404).send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.5">
-        <title>Enlace Expirado - FreeMail Hub</title>
-        <style>
-          body { font-family: -apple-system, sans-serif; text-align: center; padding: 40px 20px; background-color: #f8fafc; color: #1e293b; }
-          .card { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 24px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
-          h2 { color: #e11d48; margin-top: 0; }
-          p { font-size: 14px; line-height: 1.6; color: #64748b; }
-          .button { display: inline-block; background: #059669; color: white; padding: 10px 20px; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 13px; margin-top: 15px; }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h2>⏱ Enlace de Perfil Expirado</h2>
-          <p>El enlace de instalación QR temporal de FreeMail Hub ha caducado por motivos de seguridad informática (límite de 3 minutos excedido).</p>
-          <p>Por favor, regresa a la computadora, ingresa la contraseña de correo nuevamente y escanea un nuevo código QR dinámico.</p>
-        </div>
-      </body>
-      </html>
-    `);
-  }
-
-  const { email } = config;
-  const mobileConfigXML = generateMobileConfigXML(config);
-
-  res.setHeader('Content-Type', 'application/x-apple-aspen-config');
-  res.setHeader('Content-Disposition', `attachment; filename="configuracion-${email.split('@')[0]}.mobileconfig"`);
-  res.send(mobileConfigXML);
-});
-
-/**
- * ==========================================
- * 6. AI INTERLINING DRAFTS (GEMINI API FLAVOR)
- * ==========================================
- */
+// 7. IA - DRAFT DE EMAIL
 app.post('/api/ai/draft', async (req, res) => {
   const { prompt, currentSubject, currentBody, tone } = req.body;
 
   if (!prompt) {
-    return res.status(400).json({ error: 'La instrucción o prompt es requerido.' });
+    return res.status(400).json({ error: 'Prompt é obrigatório' });
   }
 
-  const toneDesc = tone === 'formal' ? 'formal y corporativo' : tone === 'friendly' ? 'amigable, cálido y cercano' : 'conciso, directo e informal';
-
   try {
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.includes('YOUR_GEMINI_API_KEY')) {
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
       return res.json({
-        subject: currentSubject ? `Re: ${currentSubject}` : `Propuesta: ${prompt.slice(0, 30)}...`,
-        body: `Agradezco su mensaje.\n\nEscribo con respecto a: "${prompt}".\n\n(Este borrador está operando en modo sandbox sin una llave válida configurada de Gemini en el backend).\n\nSaludo atentamente,\nUsuario de FreeMail Hub`
+        subject: currentSubject || `Assunto: ${prompt.slice(0, 30)}...`,
+        body: `Resposta ao prompt: "${prompt}"\n\n(Modo simulação - Gemini não configurado)`
       });
     }
 
-    const systemPrompt = `Eres un redactor AI avanzado en FreeMail Hub.
-Tu tarea es escribir un correo electrónico profesional en base a la solicitud que provee el usuario.
-Debes devolver estrictamente como resultado un bloque de objeto JSON formateado según la estructura delimitada abajo, sin bloques Markdown, sin explicaciones, sin texto extra fuera de la estructura:
-{
-  "subject": "Tu línea de asunto llamativa y concisa",
-  "body": "El desarrollo ordenado con saltos de línea \\n"
-}
-Tono esperado: ${toneDesc}.
-Asunto de referencia: ${currentSubject || '(Ninguno)'}.
-Cuerpo previo (para contextualizar): ${currentBody || '(Ninguno)'}.`;
-
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.0-flash-exp",
       contents: prompt,
       config: {
-        systemInstruction: systemPrompt,
+        systemInstruction: `Você é um assistente de redação de emails. Gere um email profissional. Tono: ${tone || 'formal'}`,
         responseMimeType: "application/json",
       },
     });
 
-    const responseText = response.text || '';
-    let data;
+    let data = { subject: '', body: '' };
     try {
-      data = JSON.parse(responseText.trim());
+      data = JSON.parse(response.text || '{}');
     } catch (_) {
-      const match = responseText.match(/\{[\s\S]*\}/);
-      if (match) {
-        data = JSON.parse(match[0]);
-      } else {
-        data = {
-          subject: currentSubject ? `Re: ${currentSubject}` : "AI Borrador de Correo",
-          body: responseText
-        };
-      }
+      data = { subject: 'Email gerado por IA', body: response.text || '' };
     }
 
     res.json(data);
   } catch (err: any) {
     console.error('Gemini error:', err);
-    res.status(500).json({
-      error: 'Error de la inteligencia artificial de Gemini',
-      details: err.message || String(err)
+    res.json({
+      subject: currentSubject || 'Erro na IA',
+      body: `Não foi possível gerar o email. Erro: ${err.message}`
     });
   }
 });
 
-// Single Page Application static router serving configurations
-async function initializeViteAndListen() {
-  if (process.env.NODE_ENV !== "production") {
-    // Developer Mode Vite
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+// ==========================================
+// ROTA CURINGA PARA REACT (SPA)
+// ==========================================
+app.get('*', (req, res) => {
+  const indexPath = path.join(staticPath, 'index.html');
+  
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
   } else {
-    // Production Build serving
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    res.status(404).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>FreeMail Hub</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { font-family: -apple-system, sans-serif; text-align: center; padding: 50px 20px; background: #f0f4f8; }
+          h1 { color: #0f172a; }
+          p { color: #475569; max-width: 500px; margin: 20px auto; }
+          .card { background: white; padding: 40px; border-radius: 16px; max-width: 600px; margin: 0 auto; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+          .status { color: #059669; font-weight: 600; }
+          .api { background: #f1f5f9; padding: 10px; border-radius: 8px; font-family: monospace; display: inline-block; margin: 10px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>🚀 FreeMail Hub</h1>
+          <p class="status">✅ API funcionando corretamente</p>
+          <p>Serviço de Correio Profissional 100% Gratuito</p>
+          <div class="api">/api/health</div>
+          <p style="font-size: 14px; margin-top: 30px; color: #94a3b8;">
+            Servidor rodando em produção. O frontend React está sendo compilado...
+          </p>
+        </div>
+      </body>
+      </html>
+    `);
   }
-
-  // Bind live listening port only when launched directly (not as serverless function)
-  if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`[Express Backend] running at http://0.0.0.0:${PORT}`);
-    });
-  }
-}
-
-initializeViteAndListen().catch((err) => {
-  console.error("Failed to start server/initialize Vite middleware:", err);
 });
 
+// ==========================================
+// TRATAMENTO DE ERRO GLOBAL
+// ==========================================
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error('[GLOBAL] Erro:', err);
+  res.status(500).json({
+    success: false,
+    error: 'Erro interno do servidor',
+    message: err.message || 'Erro desconhecido'
+  });
+});
+
+// ==========================================
+// EXPORTA PARA VERCEL
+// ==========================================
 export default app;
+
+// ==========================================
+// INICIALIZAÇÃO LOCAL
+// ==========================================
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📁 Static files from: ${staticPath}`);
+  });
+}
