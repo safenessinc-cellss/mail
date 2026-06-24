@@ -39,6 +39,8 @@ import AccountManager from './components/AccountManager';
 import WebmailClient from './components/WebmailClient';
 import GmailConnector from './components/GmailConnector';
 import AdminDashboard from './components/AdminDashboard';
+import SettingsView from './components/SettingsView';
+import MultiDomainArchitecture from './components/MultiDomainArchitecture';
 
 // Icons for Nav
 import { 
@@ -58,27 +60,18 @@ import {
   Terminal,
   Play,
   Loader2,
-  Shield
+  Shield,
+  Settings,
+  Server
 } from 'lucide-react';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [currentView, setCurrentView] = useState<'landing' | 'domains' | 'aliases' | 'webmail' | 'gmail' | 'publish' | 'admin'>('landing');
+  const [currentView, setCurrentView] = useState<'landing' | 'domains' | 'aliases' | 'webmail' | 'gmail' | 'publish' | 'admin' | 'settings' | 'architecture'>('landing');
   const [darkMode, setDarkMode] = useState(false);
   const [isAdminSimulated, setIsAdminSimulated] = useState(false);
-
-  // Toast notifications state
-  const [toasts, setToasts] = useState<Array<{ id: string; message: string; type: 'success' | 'error' | 'info' }>>([]);
-
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-    const id = Math.random().toString(36).substring(2, 9);
-    setToasts(prev => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 5500);
-  };
 
   // Core domain, alias, mails and profiles state
   const [domain, setDomain] = useState<Domain | null>(null);
@@ -338,20 +331,9 @@ export default function App() {
   };
 
   // DOMAIN OPERATIONAL PIPELINE
-  const handleAddDomain = async (rawDomainName: string) => {
+  const handleAddDomain = async (domainName: string) => {
     if (!user) return;
     setDbLoading(true);
-
-    // Sanitize domain name (lowercase, trim, strip protocol or www, strip trailing slash/path)
-    let domainName = rawDomainName.trim().toLowerCase();
-    domainName = domainName.replace(/^(https?:\/\/)?(www\.)?/, '');
-    domainName = domainName.split('/')[0].split('?')[0];
-
-    if (!domainName) {
-      showToast("Por favor, ingresa un nombre de dominio válido.", "error");
-      setDbLoading(false);
-      return;
-    }
 
     const domainId = isDemoMode ? 'demo_dom_id' : 'dom_' + Math.random().toString(36).substring(2, 11);
     const newDomain: Domain = {
@@ -373,7 +355,7 @@ export default function App() {
         await setDoc(doc(db, 'domains', domainId), newDomain);
       } catch (err) {
         console.error(err);
-        showToast("Error de Firestore al guardar el dominio. ¿Habilitó las reglas de seguridad?", "error");
+        alert("Error de Firestore al guardar el dominio. ¿Habilitó las reglas de seguridad?");
       }
     }
     setDbLoading(false);
@@ -394,63 +376,45 @@ export default function App() {
       const responseText = await response.text();
       let data: any = {};
       let parseError = false;
-      const trimmed = responseText.trim();
-      const isValidJson = trimmed.startsWith('{') || trimmed.startsWith('[');
-
-      if (isValidJson) {
-        try {
-          data = JSON.parse(responseText);
-        } catch (e) {
-          parseError = true;
-        }
-      } else {
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
         parseError = true;
       }
 
-      if (!response.ok) {
-        const errorMsg = parseError 
-          ? (responseText || `Error del servidor DNS (Código HTTP ${response.status})`)
-          : (data.error || `Fallo al verificar el dominio (Código ${response.status})`);
-        
-        showToast(`Error al consultar servidor DNS: ${errorMsg}`, 'error');
-        return;
-      }
+      if (response.ok && !parseError) {
+        // Upgrade current domain
+        const verifiedMX = data.mx.status === 'verified';
+        const verifiedSPF = data.spf.status === 'verified';
+        const verifiedDKIM = data.dkim.status === 'verified';
+        const verifiedDMARC = data.dmarc.status === 'verified';
 
-      if (parseError) {
-        const textSample = responseText ? (responseText.length > 200 ? responseText.substring(0, 200) + '...' : responseText) : 'Cuerpo vacío';
-        showToast(`Respuesta no estructurada del servidor DNS: ${textSample}`, 'error');
-        return;
-      }
+        const updatedDomain: Domain = {
+          ...domain,
+          mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx.currentValue },
+          spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf.currentValue },
+          dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim.currentValue },
+          dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc.currentValue },
+          verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
+        };
 
-      // Upgrade current domain
-      const verifiedMX = data.mx?.status === 'verified';
-      const verifiedSPF = data.spf?.status === 'verified';
-      const verifiedDKIM = data.dkim?.status === 'verified';
-      const verifiedDMARC = data.dmarc?.status === 'verified';
+        if (isDemoMode) {
+          setDomain(updatedDomain);
+        } else {
+          await setDoc(doc(db, 'domains', domain.id), updatedDomain);
+        }
 
-      const updatedDomain: Domain = {
-        ...domain,
-        mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue || 'No detectado' },
-        spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue || 'No detectado' },
-        dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue || 'No detectado' },
-        dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue || 'No detectado' },
-        verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
-      };
-
-      if (isDemoMode) {
-        setDomain(updatedDomain);
+        if (updatedDomain.verified) {
+          alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
+        } else {
+          alert("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.");
+        }
       } else {
-        await setDoc(doc(db, 'domains', domain.id), updatedDomain);
+        alert(data.error || "Ocurrió un error al verificar las DNS.");
       }
-
-      if (updatedDomain.verified) {
-        showToast("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.", 'success');
-      } else {
-        showToast("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.", 'info');
-      }
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
-      showToast(`Error de red o conexión: No se pudo contactar al servidor de DNS (${e.message || e})`, 'error');
+      alert("Error de conexión durante la comprobación de DNS.");
     } finally {
       setDbLoading(false);
     }
@@ -479,7 +443,7 @@ export default function App() {
       }
     }
     setDbLoading(false);
-    showToast("¡Bypass completado! Tu dominio se encuentra activado de forma simulada para el sandbox.", "success");
+    alert("¡Bypass completado! Tu dominio se encuentra activado de forma simulada para el sandbox.");
   };
 
   const handleUpdateDomain = async (updatedDomain: Domain) => {
@@ -597,7 +561,13 @@ export default function App() {
     const smtpPort = matchingAlias?.smtpPort || undefined;
     const smtpSecure = matchingAlias?.smtpSecure !== undefined ? matchingAlias.smtpSecure : undefined;
 
-    if (!isDemoMode && pwd) {
+    if (!isDemoMode) {
+      if (!pwd) {
+        alert("Error en el servidor SMTP: Contraseña SMTP requerida. Por favor, asegúrate de que el alias seleccionado tiene una contraseña configurada en el panel de cuentas.");
+        setDbLoading(false);
+        return;
+      }
+
       try {
         const smtpResponse = await fetch('/api/mail/send', {
           method: 'POST',
@@ -611,8 +581,7 @@ export default function App() {
             attachments: msg.attachments || [],
             smtpHost,
             smtpPort,
-            smtpSecure,
-            smtpBypassEnabled: domain?.smtpBypassEnabled === true
+            smtpSecure
           })
         });
 
@@ -620,32 +589,25 @@ export default function App() {
         let smtpData: any = {};
         let parseError = false;
 
-        const trimmedSmtp = responseText.trim();
-        const isValidSmtpJson = trimmedSmtp.startsWith('{') || trimmedSmtp.startsWith('[');
-
-        if (isValidSmtpJson) {
-          try {
-            smtpData = JSON.parse(responseText);
-          } catch (e) {
-            parseError = true;
-          }
-        } else {
+        try {
+          smtpData = JSON.parse(responseText);
+        } catch (e) {
           parseError = true;
         }
 
         if (!smtpResponse.ok) {
           const errMsg = parseError 
-            ? (responseText.length > 250 ? responseText.substring(0, 250) + "..." : (responseText || 'Error desconocido del servidor SMTP.'))
+            ? (responseText.length > 250 ? responseText.substring(0, 250) + "..." : responseText)
             : (smtpData.error || smtpData.details || 'Verifique sus credenciales SMTP.');
           
           const detailsMsg = (!parseError && smtpData.details) ? `\n\nDetalles SMTP: ${smtpData.details}` : '';
-          showToast(`Error en el servidor SMTP: ${errMsg}${detailsMsg}`, 'error');
+          alert(`Error en el servidor SMTP: ${errMsg}${detailsMsg}`);
           setDbLoading(false);
           return;
         }
       } catch (err: any) {
         console.error(err);
-        showToast(`Fallo de conexión SMTP: ${err.message}`, 'error');
+        alert(`Fallo de conexión SMTP: ${err.message}`);
         setDbLoading(false);
         return;
       }
@@ -757,6 +719,19 @@ export default function App() {
     }
   };
 
+  const handleUpdateMessageFolder = async (msgId: string, folder: 'inbox' | 'sent' | 'archive' | 'trash') => {
+    // Optimistic frontend updates
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, folder } : m));
+
+    if (!isDemoMode && user) {
+      try {
+        await updateDoc(doc(db, 'messages', msgId), { folder });
+      } catch (e) {
+        console.error("Error setting folder in Firestore:", e);
+      }
+    }
+  };
+
   const handleSyncIMAP = async (aliasAddress: string) => {
     if (!user) return;
     setDbLoading(true);
@@ -805,14 +780,14 @@ export default function App() {
       };
 
       setMessages(prev => [newMsg, ...prev]);
-      showToast(`¡Bandeja sincronizada! Hemos recuperado los últimos mensajes recibidos del IMAP de ${currentImapServer} de manera simulada.`, "success");
+      alert(`¡Bandeja sincronizada! Hemos recuperado los últimos mensajes recibidos del IMAP de ${currentImapServer} de manera simulada.`);
       setDbLoading(false);
       return;
     }
 
     if (!pwd) {
       setDbLoading(false);
-      showToast("No se detectó contraseña para este buzón. Por favor elimínalo y vuelve a crearlo especificando la contraseña correspondiente.", "error");
+      alert("No se detectó contraseña para este buzón. Por favor elimínalo y vuelve a crearlo especificando la contraseña correspondiente.");
       return;
     }
 
@@ -841,7 +816,7 @@ export default function App() {
         const errorText = parseError 
           ? (responseText.length > 250 ? responseText.substring(0, 250) + "..." : responseText) 
           : (data.error || data.details || "Error desconocido");
-        showToast(`Error de sincronización IMAP: ${errorText}`, "error");
+        alert(`Error de sincronización IMAP: ${errorText}`);
         return;
       }
 
@@ -869,18 +844,13 @@ export default function App() {
             importedCount++;
           }
         }
-        
-        if (data.aiBypassed) {
-          showToast(`⚠️ Sincronización IMAP mitigada por IA para eludir restricciones de red (Vercel). Revisa el informe recibido en tu bandeja de entrada.`, "info");
-        } else {
-          showToast(`Sincronización finalizada con éxito. Sincronizamos ${importedCount} correos nuevos de ${currentImapServer}.`, "success");
-        }
+        alert(`Sincronización finalizada con éxito. Sincronizamos ${importedCount} correos nuevos de ${currentImapServer}.`);
       } else {
-        showToast(`Tu buzón de correo en ${currentImapServer} está sincronizado y al día. No hay mensajes nuevos.`, "info");
+        alert(`Tu buzón de correo en ${currentImapServer} está sincronizado y al día. No hay mensajes nuevos.`);
       }
     } catch (e: any) {
       console.error(e);
-      showToast(`Falla la sincronización IMAP debido a un problema de conexión con el servidor (${currentImapServer}).`, "error");
+      alert(`Falla la sincronización IMAP debido a un problema de conexión con el servidor (${currentImapServer}).`);
     } finally {
       setDbLoading(false);
     }
@@ -1110,6 +1080,8 @@ export default function App() {
                 { id: 'aliases', label: '2. Buzones y Aliases', icon: <Layers className="h-4 w-4" /> },
                 { id: 'webmail', label: '3. Cliente Webmail', icon: <Mail className="h-4 w-4" />, disabled: aliases.length === 0 },
                 { id: 'gmail', label: '4. Gmail & Contactos', icon: <ArrowRightLeft className="h-4 w-4" /> },
+                { id: 'architecture', label: '📐 Planos de Arquitectura', icon: <Server className="h-4 w-4" /> },
+                { id: 'settings', label: '⚙️ Configuración', icon: <Settings className="h-4 w-4" /> },
                 ...((user?.email?.toLowerCase() === 'safeness.c.a@gmail.com' || isAdminSimulated) ? [{ id: 'admin', label: '★ Panel Super-Admin', icon: <Shield className="h-4 w-4 text-amber-500 shrink-0" /> }] : []),
                 { id: 'publish', label: 'Publicar & Exportar CO', icon: <Cloud className="h-4 w-4" /> }
               ].map((tab) => (
@@ -1166,6 +1138,7 @@ export default function App() {
                 onMarkRead={handleMarkRead}
                 storageUsedBytes={userProfile?.storageUsedBytes || 0}
                 onSyncIMAP={handleSyncIMAP}
+                onUpdateMessageFolder={handleUpdateMessageFolder}
               />
             )}
 
@@ -1179,10 +1152,26 @@ export default function App() {
               />
             )}
 
+            {currentView === 'settings' && (
+              <SettingsView
+                domain={domain}
+                aliases={aliases}
+                onAddAlias={handleAddAlias}
+                onDeleteAlias={handleDeleteAlias}
+                storageUsedBytes={userProfile?.storageUsedBytes || 0}
+              />
+            )}
+
             {currentView === 'admin' && (user?.email?.toLowerCase() === 'safeness.c.a@gmail.com' || isAdminSimulated) && (
               <AdminDashboard
                 currentUserEmail={user?.email || 'safeness.c.a@gmail.com'}
                 isDemoMode={isDemoMode}
+              />
+            )}
+
+            {currentView === 'architecture' && (
+              <MultiDomainArchitecture 
+                userEmail={user?.email || undefined}
               />
             )}
 
@@ -1296,45 +1285,39 @@ export default function App() {
         </div>
       )}
 
-      {/* Full screen loader */}
+      {/* Full screen cosmic loader */}
       {loading && (
-        <div className="fixed inset-0 bg-slate-50 dark:bg-slate-950 flex items-center justify-center z-50">
-          <div className="text-center space-y-3">
-            <Loader2 className="h-9 w-9 animate-spin text-emerald-600 mx-auto" />
-            <p className="text-xs text-slate-550 dark:text-slate-400 block font-mono">Iniciando Consola de FreeMail Hub...</p>
-          </div>
-        </div>
-      )}
-
-      {/* Floating dynamic toast notification panel */}
-      {toasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 max-w-sm w-full p-2">
-          {toasts.map(toast => (
-            <div
-              key={toast.id}
-              className={`p-4 rounded-2xl shadow-xl border text-xs flex items-start gap-3 transition-transform duration-300 transform scale-100 hover:scale-[1.02] ${
-                toast.type === 'error'
-                  ? 'bg-rose-50 border-rose-250 text-rose-800 dark:bg-rose-950/95 dark:border-rose-900/80 dark:text-rose-200'
-                  : toast.type === 'success'
-                  ? 'bg-emerald-50 border-emerald-250 text-emerald-800 dark:bg-emerald-950/95 dark:border-emerald-900/80 dark:text-emerald-200'
-                  : 'bg-white border-slate-200 text-slate-800 dark:bg-slate-905/95 dark:border-slate-800 dark:text-slate-200'
-              }`}
-            >
-              <AlertCircle className={`h-4 w-4 shrink-0 mt-0.5 ${
-                toast.type === 'error' ? 'text-rose-500' : toast.type === 'success' ? 'text-emerald-500' : 'text-slate-500'
-              }`} />
-              <div className="flex-1 min-w-0">
-                <p className="font-bold tracking-tight">{toast.type === 'error' ? 'Acción Requerida' : toast.type === 'success' ? 'Éxito' : 'Notificación'}</p>
-                <div className="mt-1 font-mono text-[10.5px] leading-relaxed break-words whitespace-pre-wrap select-all">{toast.message}</div>
+        <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-50">
+          {/* Ambient light effects */}
+          <div className="absolute w-[400px] h-[400px] bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute w-[300px] h-[300px] bg-pink-500/10 rounded-full blur-3xl pointer-events-none" />
+          
+          <div className="text-center space-y-3 relative z-10">
+            <div className="relative inline-block w-16 h-16 mb-4">
+              {/* Dual concentric neon spinning rings */}
+              <div className="absolute inset-0 rounded-full border-2 border-dashed border-cyan-400 animate-spin" style={{ animationDuration: '4s' }} />
+              <div className="absolute inset-1.5 rounded-full border-2 border-dashed border-pink-400 animate-spin" style={{ animationDuration: '2s', animationDirection: 'reverse' }} />
+              <div className="absolute inset-4 rounded-xl bg-slate-900 border border-cyan-500/30 flex items-center justify-center">
+                <Mail className="h-5 w-5 text-cyan-400 animate-pulse" />
               </div>
-              <button
-                onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-amber-100 font-bold text-sm px-1.5 cursor-pointer leading-none"
-              >
-                ×
-              </button>
             </div>
-          ))}
+            
+            <h1 className="text-2xl font-black font-display tracking-wider text-white uppercase neon-text-cyan">
+              FREEMAIL
+            </h1>
+            <span className="text-[10px] uppercase tracking-widest text-[#a0a0a0] font-sans font-bold block">
+              by Safeness.Inc
+            </span>
+            
+            <p className="text-[10px] text-slate-500 font-mono pt-4 transition uppercase tracking-widest leading-none">
+              Iniciando Consola Encriptada...
+            </p>
+          </div>
+          
+          {/* Subtle trademark text at the bottom */}
+          <div className="absolute bottom-8 font-mono text-[9px] text-slate-650 tracking-wider">
+            © 2026 Safeness.Inc - Todos los derechos reservados
+          </div>
         </div>
       )}
     </div>
