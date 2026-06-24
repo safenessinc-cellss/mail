@@ -39,7 +39,7 @@ import AccountManager from './components/AccountManager';
 import WebmailClient from './components/WebmailClient';
 import GmailConnector from './components/GmailConnector';
 import AdminDashboard from './components/AdminDashboard';
-import SettingsView from './components/SettingsView';
+import SettingsPanel from './components/SettingsPanel';
 import MultiDomainArchitecture from './components/MultiDomainArchitecture';
 
 // Icons for Nav
@@ -1153,7 +1153,7 @@ export default function App() {
             )}
 
             {currentView === 'settings' && (
-              <SettingsView
+              <SettingsPanel
                 domain={domain}
                 aliases={aliases}
                 onAddAlias={handleAddAlias}
