@@ -421,6 +421,34 @@ export default function DomainManager({
                 )}
               </div>
 
+              {/* Dynamic provider-agnostic status feedback */}
+              <div className="mb-6 p-4 rounded-2xl bg-slate-100/60 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300">
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2 font-medium text-slate-900 dark:text-white">
+                    {domain.verified ? (
+                      <>
+                        <span className="text-emerald-500 text-sm">✅</span>
+                        <span>DNS verificados: Registros MX correctos detectados, SPF es válido. ¡Flujo de correo 100% activo!</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-amber-500 text-sm">⚠️</span>
+                        <span>
+                          {!domain.mxRecord.currentValue || domain.mxRecord.currentValue.includes("No MX") || domain.mxRecord.currentValue.includes("Error") ? (
+                            "No se detectaron registros MX válidos. Asegúrate de haber configurado los registros en tu proveedor de DNS."
+                          ) : (
+                            "⏳ Esperando configuración DNS completa... Registro MX detectado pero requiere validación del SPF."
+                          )}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Soporte Universal: FreeMail Hub es compatible de forma nativa con <strong>cualquier proveedor de correo o de DNS</strong> (ImprovMX, Resend, Hostinger, Cloudflare, Zoho, etc.). No dependes de ningún servicio exclusivo.
+                  </p>
+                </div>
+              </div>
+
               {/* Records Loop */}
               <div className="space-y-4">
                 {[
