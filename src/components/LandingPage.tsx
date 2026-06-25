@@ -26,7 +26,8 @@ import {
   Calendar,
   Check
 } from 'lucide-react';
-import DnsParticles from "./DnsParticles";
+// ✅ CORREGIDO: Importación correcta del componente renombrado
+import DnsParticles from './DnsParticles';
 
 interface LandingPageProps {
   onGetStarted: () => void;
@@ -91,8 +92,8 @@ export default function LandingPage({ onGetStarted, onDemoBypass }: LandingPageP
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-cyan-500 selection:text-slate-950 select-none relative overflow-hidden">
-      {/* Moving stars background */}
-      <ParticlesBackground />
+      {/* ✅ CORREGIDO: Uso correcto del componente */}
+      <DnsParticles />
 
       {/* Decorative gradient ambient glows */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[350px] bg-gradient-to-b from-cyan-500/10 to-transparent rounded-full blur-3xl pointer-events-none" />
