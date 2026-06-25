@@ -240,8 +240,8 @@ export default function App() {
       domainName: 'miempresacreativa.com',
       verified: true,
       createdAt: new Date().toISOString(),
-      mxRecord: { type: 'MX', host: '@', expectedValue: '10 mail.freemailhub.com', status: 'verified' },
-      spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.freemailhub.com ~all', status: 'verified' },
+      mxRecord: { type: 'MX', host: '@', expectedValue: '10 mx1.improvmx.com y 20 mx2.improvmx.com', status: 'verified' },
+      spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.improvmx.com ~all', status: 'verified' },
       dkimRecord: { type: 'TXT', host: 'fmhub._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhki...', status: 'verified' },
       dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=quarantine; pct=100', status: 'verified' }
     };
@@ -342,8 +342,8 @@ export default function App() {
       domainName,
       verified: false,
       createdAt: new Date().toISOString(),
-      mxRecord: { type: 'MX', host: '@', expectedValue: '10 mx1.hostinger.com y 10 mx2.hostinger.com', status: 'pending' },
-      spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.hostinger.com ~all', status: 'pending' },
+      mxRecord: { type: 'MX', host: '@', expectedValue: '10 mx1.improvmx.com y 20 mx2.improvmx.com', status: 'pending' },
+      spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.improvmx.com ~all', status: 'pending' },
       dkimRecord: { type: 'TXT', host: 'default._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0G9h...', status: 'pending' },
       dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: `v=DMARC1; p=none; rua=mailto:dmarc@${domainName}`, status: 'pending' }
     };
@@ -742,7 +742,7 @@ export default function App() {
       return;
     }
     const pwd = matchingAlias.password || "";
-    const currentImapServer = matchingAlias.imapHost || "Hostinger";
+    const currentImapServer = matchingAlias.imapHost || "ImprovMX/Resend";
 
     if (isDemoMode) {
       const simulatedInboundMails = [
@@ -750,8 +750,8 @@ export default function App() {
           fromName: "Soporte Técnico de Correo",
           fromAddress: `support@${matchingAlias.domainName}`,
           toAddress: aliasAddress,
-          subject: `Activación de Cuenta de Correo Corporativo - SMTP/IMAP (${currentImapServer})`,
-          body: `Estimado Cliente,\n\nTu cuenta de correo electrónico ${aliasAddress} ha sido configurada exitosamente con tu servidor de correo en ${currentImapServer}.\n\nParámetros de Servidor Configurados:\nHost IMAP: ${matchingAlias.imapHost || 'imap.hostinger.com'} (${matchingAlias.imapPort || 993} SSL)\nHost SMTP: ${matchingAlias.smtpHost || 'smtp.hostinger.com'} (${matchingAlias.smtpPort || 465} SSL o 587 STARTTLS)\n\n¡Gracias por utilizar la tecnología avanzada de FreeMail Hub!\n\nAtentamente,\nSoporte Técnico.`,
+          subject: `Activación de Cuenta de Correo Corporativo - ImprovMX & Resend`,
+          body: `Estimado Cliente,\n\nTu cuenta de correo electrónico ${aliasAddress} ha sido configurada exitosamente.\n\nServicio de Entrada (Reenvío): ImprovMX (Redirige automáticamente a tu correo personal)\nServidor de Salida (SMTP): ${matchingAlias.smtpHost || 'smtp.resend.com'} (${matchingAlias.smtpPort || 587} STARTTLS)\n\n¡Gracias por utilizar FreeMail Hub!\n\nAtentamente,\nSoporte Técnico.`,
         },
         {
           fromName: "Garante de Seguridad",
