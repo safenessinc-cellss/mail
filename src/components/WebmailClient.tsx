@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Domain, EmailAlias, EmailMessage, EmailAttachment } from '../types';
 import { 
   Mail, 
@@ -44,6 +44,48 @@ interface WebmailClientProps {
   onSyncIMAP?: (aliasAddress: string) => Promise<void>;
 }
 
+// ============================================
+// NUEVO: Hook para cargar correos del webhook
+// ============================================
+
+function useWebhookInbox() {
+  const [webhookEmails, setWebhookEmails] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadEmails = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/mail/inbox');
+      const data = await response.json();
+      
+      if (data.success) {
+        setWebhookEmails(data.emails || []);
+      } else {
+        setError(data.error || 'Error al cargar correos');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error de conexión');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Cargar al montar el componente
+  useEffect(() => {
+    loadEmails();
+  }, [loadEmails]);
+
+  // Refrescar cada 30 segundos
+  useEffect(() => {
+    const interval = setInterval(loadEmails, 30000);
+    return () => clearInterval(interval);
+  }, [loadEmails]);
+
+  return { webhookEmails, loading, error, refresh: loadEmails };
+}
+
 export default function WebmailClient({
   domain,
   aliases,
@@ -55,6 +97,11 @@ export default function WebmailClient({
   storageUsedBytes,
   onSyncIMAP
 }: WebmailClientProps) {
+  // ============================================
+  // NUEVO: Integración con webhook
+  // ============================================
+  const { webhookEmails, loading: webhookLoading, error: webhookError, refresh: refreshWebhook } = useWebhookInbox();
+
   // Navigation folders state
   const [activeFolder, setActiveFolder] = useState<'inbox' | 'sent' | 'drafts' | 'spam' | 'trash'>('inbox');
   const [selectedMessage, setSelectedMessage] = useState<EmailMessage | null>(null);
@@ -85,6 +132,37 @@ export default function WebmailClient({
   const [aiTone, setAiTone] = useState<'professional' | 'formal' | 'casual' | 'marketing'>('professional');
   const [aiLoading, setAiLoading] = useState(false);
 
+  // ============================================
+  // NUEVO: Convertir correos del webhook al formato de EmailMessage
+  // ============================================
+  const webhookMessages: EmailMessage[] = useMemo(() => {
+    return webhookEmails.map((email: any) => ({
+      id: email.id || `webhook_${Date.now()}_${Math.random()}`,
+      aliasId: '',
+      aliasAddress: email.to || 'hola@coach-iso.eu',
+      fromName: email.from?.split('@')[0] || 'Remitente',
+      fromAddress: email.from || 'unknown@domain.com',
+      toAddress: email.to || 'hola@coach-iso.eu',
+      subject: email.subject || '(Sin Asunto)',
+      body: email.html || email.text || '',
+      folder: 'inbox',
+      read: false,
+      createdAt: email.receivedAt || email.createdAt || new Date().toISOString(),
+      attachments: email.attachments || []
+    }));
+  }, [webhookEmails]);
+
+  // ============================================
+  // NUEVO: Combinar mensajes locales con webhook
+  // ============================================
+  const allMessages = useMemo(() => {
+    // Si hay mensajes del webhook, usarlos (evitar duplicados)
+    if (webhookMessages.length > 0) {
+      return webhookMessages;
+    }
+    return messages;
+  }, [messages, webhookMessages]);
+
   // Update dropdown defaults if aliases bound
   useMemo(() => {
     if (aliases.length > 0 && !aliases.some(a => a.address === senderAliasAddress)) {
@@ -97,7 +175,7 @@ export default function WebmailClient({
 
   // Folder and Search and Filter Type Calculations
   const filteredMessages = useMemo(() => {
-    let folderMsgs = messages.filter(m => m.folder === activeFolder);
+    let folderMsgs = allMessages.filter(m => m.folder === activeFolder);
     
     // Quick filter classification
     if (filterType === 'unread') {
@@ -116,12 +194,19 @@ export default function WebmailClient({
       m.fromName.toLowerCase().includes(query) ||
       m.toAddress.toLowerCase().includes(query)
     );
-  }, [messages, activeFolder, searchQuery, filterType]);
+  }, [allMessages, activeFolder, searchQuery, filterType]);
 
   // Unread metrics
   const unreadCount = useMemo(() => {
-    return messages.filter(m => m.folder === 'inbox' && !m.read).length;
-  }, [messages]);
+    return allMessages.filter(m => m.folder === 'inbox' && !m.read).length;
+  }, [allMessages]);
+
+  // ============================================
+  // NUEVO: Sincronizar con webhook manualmente
+  // ============================================
+  const handleManualSync = useCallback(async () => {
+    await refreshWebhook();
+  }, [refreshWebhook]);
 
   // Handle viewing message details
   const handleSelectMessage = (msg: EmailMessage) => {
@@ -284,6 +369,8 @@ export default function WebmailClient({
         folder: 'inbox',
         read: false
       });
+      // Refrescar webhook después de simular
+      await refreshWebhook();
     } catch (err) {
       console.error("Simulation error:", err);
     } finally {
@@ -321,7 +408,7 @@ export default function WebmailClient({
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-bold text-white font-display tracking-tight">Centro de Webmail Satélite</h2>
               <span className="hidden sm:inline bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 text-[10px] font-mono uppercase px-2 py-0.5 rounded-full tracking-wider">
-                Motor v1.5
+                Motor v2.0
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-1 font-light leading-snug">
@@ -352,6 +439,23 @@ export default function WebmailClient({
             </div>
           </div>
 
+          {/* ============================================
+              NUEVO: Botón de sincronización con webhook
+              ============================================ */}
+          <button
+            id="btn-sync-webhook"
+            onClick={handleManualSync}
+            disabled={webhookLoading}
+            className="flex-1 sm:flex-initial inline-flex items-center justify-center py-2 px-4 bg-emerald-550/15 hover:bg-emerald-550/25 text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 rounded-2xl text-xs font-semibold cursor-pointer transition-all duration-300 hover:scale-[1.02] shadow-[0_0_15px_rgba(16,185,129,0.1)] active:scale-[0.98] disabled:opacity-50"
+          >
+            {webhookLoading ? (
+              <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5 mr-2" />
+            )}
+            Sincronizar Bandeja
+          </button>
+
           {/* Interactive buttons */}
           {aliases.length > 0 && (
             <div className="flex items-center gap-2 shrink-0">
@@ -381,6 +485,29 @@ export default function WebmailClient({
           )}
         </div>
       </div>
+
+      {/* ============================================
+          NUEVO: Indicador de estado del webhook
+          ============================================ */}
+      {webhookError && (
+        <div className="bg-red-950/20 border border-red-500/30 p-3 rounded-2xl flex items-center gap-3 text-xs text-red-400">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>Error al sincronizar con el webhook: {webhookError}</span>
+          <button 
+            onClick={handleManualSync}
+            className="ml-auto px-3 py-1 bg-red-950/40 hover:bg-red-950/60 rounded-xl text-red-300 transition"
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
+
+      {webhookLoading && (
+        <div className="bg-indigo-950/20 border border-indigo-500/30 p-3 rounded-2xl flex items-center gap-3 text-xs text-indigo-400">
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <span>Sincronizando bandeja de entrada...</span>
+        </div>
+      )}
 
       {aliases.length === 0 ? (
         /* Empty accounts trigger screen */
@@ -526,7 +653,16 @@ export default function WebmailClient({
             {/* Scrollable mail items list */}
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-850 select-none">
               <AnimatePresence mode="popLayout">
-                {filteredMessages.length === 0 ? (
+                {webhookLoading && filteredMessages.length === 0 ? (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="py-16 px-4 text-center text-slate-400 text-xs flex flex-col items-center justify-center space-y-3"
+                  >
+                    <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+                    <p className="font-medium text-slate-500 dark:text-slate-450">Cargando correos...</p>
+                  </motion.div>
+                ) : filteredMessages.length === 0 ? (
                   <motion.div 
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
