@@ -7,6 +7,7 @@ import express from "express";
 import dotenv from "dotenv";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 
 dotenv.config();
 
@@ -14,47 +15,37 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================
-// INICIALIZAR FIREBASE ADMIN
+// CONFIGURACIÓN DE FIREBASE ADMIN
 // ============================================
 
-// Verificar si estamos en Vercel (variables de entorno) o local (archivo)
-let firebaseConfig: any = {};
+// Configuración de Firebase usando variables de entorno
+// O puedes usar la configuración directa (para pruebas)
+const firebaseConfig = {
+  projectId: "freemail-c2a13",
+  clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "firebase-adminsdk-fbsvc@freemail-c2a13.iam.gserviceaccount.com",
+  privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n') || undefined,
+};
 
-if (process.env.FIREBASE_PROJECT_ID) {
-  // Modo Vercel - usar variables de entorno
-  firebaseConfig = {
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  };
-} else {
-  // Modo local - usar archivo de credenciales
-  try {
-    const serviceAccount = require("./firebase-credentials.json");
-    firebaseConfig = {
-      projectId: serviceAccount.project_id,
-      clientEmail: serviceAccount.client_email,
-      privateKey: serviceAccount.private_key,
-    };
-  } catch (err) {
-    console.warn("[Firebase] Credenciales no encontradas. Usando modo simulación.");
-  }
-}
-
+// Si no hay clave privada, intentamos usar la configuración por defecto
 let db: any = null;
+let auth: any = null;
+
 try {
-  if (firebaseConfig.projectId && firebaseConfig.privateKey) {
+  // Si tenemos credenciales, inicializar Firebase Admin
+  if (firebaseConfig.privateKey && firebaseConfig.privateKey !== "undefined") {
     initializeApp({
       credential: cert(firebaseConfig),
       projectId: firebaseConfig.projectId,
     });
     db = getFirestore();
-    console.log("[Firebase] Conectado a Firestore correctamente");
+    auth = getAuth();
+    console.log("[Firebase] ✅ Conectado a Firestore correctamente");
   } else {
-    console.warn("[Firebase] Firebase no configurado. Los correos solo se guardarán en memoria.");
+    console.warn("[Firebase] ⚠️ Sin credenciales de servicio. Usando solo memoria.");
+    console.warn("[Firebase] 💡 Para usar Firestore, configura FIREBASE_PRIVATE_KEY en Vercel.");
   }
 } catch (err) {
-  console.error("[Firebase] Error al inicializar Firebase:", err);
+  console.error("[Firebase] ❌ Error al inicializar Firebase:", err);
 }
 
 // ============================================
@@ -75,14 +66,11 @@ async function saveEmailToFirestore(emailData: any): Promise<string> {
   }
 
   try {
-    // Usar el ID del correo o generar uno nuevo
     const docId = emailData.id || `email_${Date.now()}`;
     const docRef = db.collection("messages").doc(docId);
     
-    // Verificar si el documento ya existe
     const doc = await docRef.get();
     if (!doc.exists) {
-      // Crear el documento con los datos del correo
       await docRef.set({
         ...emailData,
         createdAt: emailData.createdAt || new Date().toISOString(),
@@ -92,17 +80,15 @@ async function saveEmailToFirestore(emailData: any): Promise<string> {
         aliasId: "webhook",
         aliasAddress: emailData.to || "hola@coach-iso.eu",
       });
-      console.log(`[Firestore] ✅ Correo guardado en Firestore: ${docId}`);
+      console.log(`[Firestore] ✅ Correo guardado: ${docId}`);
     } else {
-      console.log(`[Firestore] ⚠️ El correo ${docId} ya existe en Firestore`);
+      console.log(`[Firestore] ⚠️ Correo ${docId} ya existe`);
     }
     
-    // También guardar en memoria para respaldo
     receivedEmails.unshift(emailData);
     return docId;
   } catch (err) {
-    console.error("[Firestore] ❌ Error guardando en Firestore:", err);
-    // Fallback a memoria
+    console.error("[Firestore] ❌ Error:", err);
     receivedEmails.unshift(emailData);
     return emailData.id;
   }
@@ -141,17 +127,16 @@ app.get("/api/health", (_req, res) => {
 });
 
 // ============================================
-// WEBHOOK PARA RECIBIR CORREOS (RESEND - MEJORADO)
+// WEBHOOK PARA RECIBIR CORREOS
 // ============================================
 
 app.post("/api/mail/webhook", async (req, res) => {
   try {
-    console.log("[Webhook] 📩 Correo recibido:");
-    console.log("[Webhook] Body completo:", JSON.stringify(req.body, null, 2));
+    console.log("[Webhook] 📩 Correo recibido");
     
     const payload = req.body.data || req.body;
     
-    // Extraer información del remitente (from)
+    // Extraer remitente
     let fromAddress = 'remitente@desconocido.com';
     let fromName = 'Remitente';
     
@@ -169,7 +154,7 @@ app.post("/api/mail/webhook", async (req, res) => {
       fromName = payload.from.name || fromAddress.split('@')[0] || 'Remitente';
     }
     
-    // Extraer información del destinatario (to)
+    // Extraer destinatario
     let toAddress = 'destinatario@desconocido.com';
     
     if (typeof payload.to === 'string') {
@@ -211,19 +196,16 @@ app.post("/api/mail/webhook", async (req, res) => {
       receivedAt: new Date().toISOString()
     };
     
-    console.log("[Webhook] 📧 Datos extraídos:");
-    console.log(`  De: ${fromName} <${fromAddress}>`);
-    console.log(`  Para: ${toAddress}`);
-    console.log(`  Asunto: ${subject}`);
+    console.log(`[Webhook] De: ${fromName} <${fromAddress}>`);
+    console.log(`[Webhook] Para: ${toAddress}`);
+    console.log(`[Webhook] Asunto: ${subject}`);
     
-    // Guardar en Firestore (o memoria)
+    // Guardar en Firestore
     const docId = await saveEmailToFirestore(emailData);
-    
-    console.log(`[Webhook] ✅ Correo almacenado con ID: ${docId}`);
     
     res.status(200).json({ 
       success: true, 
-      message: "Correo recibido y almacenado correctamente",
+      message: "Correo recibido y almacenado",
       emailId: docId
     });
     
@@ -232,23 +214,21 @@ app.post("/api/mail/webhook", async (req, res) => {
     res.status(200).json({ 
       success: false, 
       error: err.message,
-      message: "Error procesando el correo, pero confirmamos recepción"
+      message: "Error procesando correo"
     });
   }
 });
 
 // ============================================
-// OBTENER CORREOS RECIBIDOS (DESDE FIRESTORE)
+// OBTENER CORREOS
 // ============================================
 
 app.get("/api/mail/inbox", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit as string) || 20;
-    
     let emails = [];
     
     if (db) {
-      // Intentar obtener de Firestore
       const snapshot = await db.collection("messages")
         .orderBy("createdAt", "desc")
         .limit(limit)
@@ -259,7 +239,6 @@ app.get("/api/mail/inbox", async (req, res) => {
         ...doc.data()
       }));
     } else {
-      // Fallback a memoria
       emails = receivedEmails.slice(0, limit);
     }
     
@@ -279,7 +258,7 @@ app.get("/api/mail/inbox", async (req, res) => {
 });
 
 // ============================================
-// OBTENER UN CORREO ESPECÍFICO POR ID
+// OBTENER CORREO POR ID
 // ============================================
 
 app.get("/api/mail/inbox/:id", async (req, res) => {
@@ -316,13 +295,43 @@ app.get("/api/mail/inbox/:id", async (req, res) => {
 });
 
 // ============================================
-// ENVÍO DE CORREOS CON RESEND
+// ELIMINAR CORREO
+// ============================================
+
+app.delete("/api/mail/inbox/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (db) {
+      await db.collection("messages").doc(id).delete();
+      console.log(`[Inbox] ✅ Correo ${id} eliminado de Firestore`);
+    }
+    
+    // También eliminar de memoria
+    const index = receivedEmails.findIndex(e => e.id === id);
+    if (index !== -1) {
+      receivedEmails.splice(index, 1);
+    }
+    
+    res.json({
+      success: true,
+      message: `Correo ${id} eliminado`
+    });
+  } catch (err: any) {
+    console.error("[Inbox] Error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// ============================================
+// ENVÍO DE CORREOS
 // ============================================
 
 app.post("/api/mail/send-http", async (req, res) => {
   try {
-    console.log("[send-http] Recibida solicitud de envío");
-    
     const { senderEmail, to, subject, body } = req.body || {};
     
     if (!senderEmail || !to) {
@@ -334,16 +343,11 @@ app.post("/api/mail/send-http", async (req, res) => {
 
     const apiKey = process.env.RESEND_API_KEY || process.env.SMTP_PASS;
     if (!apiKey) {
-      console.error("[send-http] Error: API Key no configurada");
       return res.status(400).json({
         success: false,
-        error: "RESEND_API_KEY o SMTP_PASS no configurada. Agrega la variable en Vercel."
+        error: "RESEND_API_KEY no configurada"
       });
     }
-
-    console.log("[send-http] Enviando correo a:", to);
-    console.log("[send-http] Desde:", senderEmail);
-    console.log("[send-http] Asunto:", subject);
 
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -360,34 +364,26 @@ app.post("/api/mail/send-http", async (req, res) => {
     });
 
     const data = await response.json();
-    console.log("[send-http] Respuesta de Resend:", data);
 
     if (!response.ok) {
-      console.error("[send-http] Error de Resend:", data);
       return res.status(response.status).json({ 
         success: false, 
-        error: data.message || "Error al enviar el correo",
-        details: data
+        error: data.message || "Error al enviar el correo"
       });
     }
 
-    // Guardar el correo enviado en Firestore (opcional)
+    // Guardar correo enviado
     if (db) {
-      try {
-        await db.collection("messages").doc(`sent_${data.id}`).set({
-          from: senderEmail,
-          to: to,
-          subject: subject || "(Sin Asunto)",
-          body: body || "",
-          createdAt: new Date().toISOString(),
-          folder: "sent",
-          read: true,
-          ownerId: "webhook",
-        });
-        console.log(`[send-http] ✅ Correo enviado guardado en Firestore`);
-      } catch (err) {
-        console.warn("[send-http] No se pudo guardar en Firestore:", err);
-      }
+      await db.collection("messages").doc(`sent_${data.id}`).set({
+        from: senderEmail,
+        to: to,
+        subject: subject || "(Sin Asunto)",
+        body: body || "",
+        createdAt: new Date().toISOString(),
+        folder: "sent",
+        read: true,
+        ownerId: "webhook",
+      });
     }
 
     return res.json({ 
@@ -410,13 +406,12 @@ app.post("/api/mail/send-http", async (req, res) => {
 // ============================================
 
 app.post("/api/mail/send", async (req, res) => {
-  console.log("[send] Redirigiendo a /api/mail/send-http");
   req.url = '/api/mail/send-http';
   app.handle(req, res);
 });
 
 // ============================================
-// DNS VERIFICATION (Simulada)
+// DNS VERIFICATION
 // ============================================
 
 app.post("/api/dns/verify-dns", async (req, res) => {
@@ -444,7 +439,7 @@ app.post("/api/dns/verify-dns", async (req, res) => {
 });
 
 // ============================================
-// AI DRAFT (Simulado)
+// AI DRAFT
 // ============================================
 
 app.post("/api/ai/draft", async (req, res) => {
@@ -454,7 +449,7 @@ app.post("/api/ai/draft", async (req, res) => {
       return res.status(400).json({ error: "Prompt es requerido" });
     }
 
-    const simulatedBody = `Estimado equipo,\n\nEn respuesta a su solicitud: "${prompt}".\n\nHemos preparado la información solicitada con un enfoque ${tone}. Quedamos atentos a cualquier consulta adicional.\n\nAtentamente,\nEl equipo de FreeMail Hub`;
+    const simulatedBody = `Estimado equipo,\n\nEn respuesta a su solicitud: "${prompt}".\n\nHemos preparado la información solicitada con un enfoque ${tone}.\n\nAtentamente,\nEl equipo de FreeMail Hub`;
     
     res.json({
       subject: `Propuesta: ${prompt.substring(0, 30)}...`,
@@ -509,9 +504,9 @@ export default app;
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`[FreeMail Hub] Servidor corriendo en http://localhost:${PORT}`);
-    console.log(`[FreeMail Hub] API Key: ${process.env.RESEND_API_KEY || process.env.SMTP_PASS ? '✅ Configurada' : '❌ No configurada'}`);
-    console.log(`[FreeMail Hub] Webhook: POST /api/mail/webhook`);
-    console.log(`[FreeMail Hub] Inbox: GET /api/mail/inbox`);
-    console.log(`[FreeMail Hub] Firebase: ${db ? '✅ Conectado' : '❌ No configurado'}`);
+    console.log(`[FreeMail Hub] 🔑 Resend: ${process.env.RESEND_API_KEY ? '✅' : '❌'}`);
+    console.log(`[FreeMail Hub] 🔥 Firebase: ${db ? '✅ Conectado' : '❌ No configurado'}`);
+    console.log(`[FreeMail Hub] 📬 Webhook: POST /api/mail/webhook`);
+    console.log(`[FreeMail Hub] 📬 Inbox: GET /api/mail/inbox`);
   });
 }
