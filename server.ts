@@ -29,56 +29,25 @@ app.use((req, res, next) => {
 });
 
 // ============================================
-// CONFIGURACIÓN SMTP DESDE VARIABLES DE ENTORNO
-// ============================================
-
-const SMTP_CONFIG = {
-  host: process.env.SMTP_HOST || "smtp.resend.com",
-  port: parseInt(process.env.SMTP_PORT || "587"),
-  secure: process.env.SMTP_SECURE === 'true',
-  user: process.env.SMTP_USER || "resend",
-  pass: process.env.SMTP_PASS || process.env.RESEND_API_KEY || "",
-  from: process.env.SMTP_FROM || "hola@coach-iso.eu",
-  auth: process.env.SMTP_AUTH === 'true'
-};
-
-console.log("[SMTP] Configuración cargada:");
-console.log(`  Host: ${SMTP_CONFIG.host}`);
-console.log(`  Port: ${SMTP_CONFIG.port}`);
-console.log(`  Secure: ${SMTP_CONFIG.secure}`);
-console.log(`  User: ${SMTP_CONFIG.user}`);
-console.log(`  From: ${SMTP_CONFIG.from}`);
-console.log(`  Auth: ${SMTP_CONFIG.auth}`);
-console.log(`  Pass: ${SMTP_CONFIG.pass ? '✅ Configurada' : '❌ No configurada'}`);
-
-// ============================================
 // HEALTH CHECK
 // ============================================
 
 app.get("/api/health", (_req, res) => {
-  res.json({
-    status: "ok",
+  res.json({ 
+    status: "ok", 
     time: new Date().toISOString(),
-    config: {
-      smtp_host: !!process.env.SMTP_HOST,
-      smtp_port: !!process.env.SMTP_PORT,
-      smtp_user: !!process.env.SMTP_USER,
-      smtp_pass: !!process.env.SMTP_PASS,
-      smtp_from: !!process.env.SMTP_FROM,
-      resend_api_key: !!process.env.RESEND_API_KEY,
-      smtp_secure: process.env.SMTP_SECURE || 'false',
-      smtp_auth: process.env.SMTP_AUTH || 'false'
-    }
+    env: process.env.NODE_ENV || 'development',
+    resend_configured: !!process.env.RESEND_API_KEY || !!process.env.SMTP_PASS
   });
 });
 
 // ============================================
-// ENVÍO DE CORREOS (Usando SMTP con Nodemailer)
+// ENVÍO DE CORREOS CON RESEND (FUNCIONAL)
 // ============================================
 
-app.post("/api/mail/send", async (req, res) => {
+app.post("/api/mail/send-http", async (req, res) => {
   try {
-    console.log("[SMTP] Recibida solicitud de envío");
+    console.log("[send-http] Recibida solicitud de envío");
     
     const { senderEmail, to, subject, body } = req.body || {};
     
@@ -89,97 +58,21 @@ app.post("/api/mail/send", async (req, res) => {
       });
     }
 
-    // Verificar configuración SMTP
-    if (!SMTP_CONFIG.pass) {
-      console.error("[SMTP] Error: Contraseña SMTP no configurada");
-      return res.status(400).json({
-        success: false,
-        error: "Contraseña SMTP no configurada. Verifica SMTP_PASS en variables de entorno."
-      });
-    }
-
-    // Importar Nodemailer dinámicamente
-    const nodemailer = await import('nodemailer');
-    
-    const transporter = nodemailer.createTransport({
-      host: SMTP_CONFIG.host,
-      port: SMTP_CONFIG.port,
-      secure: SMTP_CONFIG.secure,
-      auth: {
-        user: SMTP_CONFIG.user,
-        pass: SMTP_CONFIG.pass,
-      },
-      connectionTimeout: 15000,
-      tls: {
-        rejectUnauthorized: false
-      }
-    });
-
-    // Verificar conexión
-    try {
-      await transporter.verify();
-      console.log("[SMTP] Conexión verificada correctamente");
-    } catch (verifyErr: any) {
-      console.error("[SMTP] Error de verificación:", verifyErr.message);
-      return res.status(500).json({
-        success: false,
-        error: "No se pudo conectar con el servidor SMTP",
-        details: verifyErr.message
-      });
-    }
-
-    // Preparar correo
-    const mailOptions = {
-      from: `"${senderEmail.split('@')[0]}" <${senderEmail}>`,
-      to,
-      subject: subject || "(Sin Asunto)",
-      text: body || "",
-      html: (body || "").replace(/\n/g, "<br/>"),
-    };
-
-    // Enviar
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`[SMTP] Correo enviado exitosamente. MessageId: ${info.messageId}`);
-    
-    return res.json({ 
-      success: true, 
-      messageId: info.messageId,
-      message: "Correo enviado correctamente"
-    });
-
-  } catch (err: any) {
-    console.error("[SMTP] Error detallado:", err);
-    return res.status(500).json({
-      success: false,
-      error: err.message || "Error al enviar el correo",
-      details: err.response || err.code || "Error desconocido"
-    });
-  }
-});
-
-// ============================================
-// ENVÍO DE CORREOS CON RESEND (Alternativa)
-// ============================================
-
-app.post("/api/mail/send-resend", async (req, res) => {
-  try {
-    const { senderEmail, to, subject, body } = req.body || {};
-    
-    if (!senderEmail || !to) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "senderEmail y to son requeridos" 
-      });
-    }
-
+    // Verificar API Key
     const apiKey = process.env.RESEND_API_KEY || process.env.SMTP_PASS;
     if (!apiKey) {
+      console.error("[send-http] Error: API Key no configurada");
       return res.status(400).json({
         success: false,
-        error: "RESEND_API_KEY o SMTP_PASS no configurada"
+        error: "RESEND_API_KEY o SMTP_PASS no configurada. Agrega la variable en Vercel."
       });
     }
 
+    console.log("[send-http] Enviando correo a:", to);
+    console.log("[send-http] Desde:", senderEmail);
+    console.log("[send-http] Asunto:", subject);
+
+    // Llamar a la API de Resend
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -195,28 +88,41 @@ app.post("/api/mail/send-resend", async (req, res) => {
     });
 
     const data = await response.json();
+    console.log("[send-http] Respuesta de Resend:", data);
 
     if (!response.ok) {
-      console.error("[Resend] Error:", data);
+      console.error("[send-http] Error de Resend:", data);
       return res.status(response.status).json({ 
         success: false, 
-        error: data.message || "Error al enviar el correo" 
+        error: data.message || "Error al enviar el correo",
+        details: data
       });
     }
 
     return res.json({ 
       success: true, 
       messageId: data.id,
-      message: "Correo enviado correctamente con Resend"
+      message: "Correo enviado correctamente"
     });
 
   } catch (err: any) {
-    console.error("[Resend] Error:", err);
+    console.error("[send-http] Error:", err);
     return res.status(500).json({ 
       success: false, 
       error: err.message || "Error al enviar el correo" 
     });
   }
+});
+
+// ============================================
+// REDIRECCIÓN PARA /api/mail/send (Mantener compatibilidad)
+// ============================================
+
+app.post("/api/mail/send", async (req, res) => {
+  console.log("[send] Redirigiendo a /api/mail/send-http");
+  // Reenviar la solicitud a la ruta funcional
+  req.url = '/api/mail/send-http';
+  app.handle(req, res);
 });
 
 // ============================================
@@ -281,10 +187,22 @@ app.get("/api", (_req, res) => {
     endpoints: [
       "/api/health",
       "/api/mail/send",
-      "/api/mail/send-resend",
+      "/api/mail/send-http",
       "/api/ai/draft",
       "/api/dns/verify-dns"
     ]
+  });
+});
+
+// ============================================
+// MANEJO DE RUTAS NO ENCONTRADAS
+// ============================================
+
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: "Ruta no encontrada", 
+    path: req.url,
+    message: "Verifica que la URL sea correcta"
   });
 });
 
@@ -298,7 +216,6 @@ export default app;
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`[FreeMail Hub] Servidor corriendo en http://localhost:${PORT}`);
-    console.log(`[FreeMail Hub] SMTP Pass: ${SMTP_CONFIG.pass ? '✅ Configurada' : '❌ No configurada'}`);
-    console.log(`[FreeMail Hub] SMTP Host: ${SMTP_CONFIG.host}`);
+    console.log(`[FreeMail Hub] API Key: ${process.env.RESEND_API_KEY || process.env.SMTP_PASS ? '✅ Configurada' : '❌ No configurada'}`);
   });
 }
