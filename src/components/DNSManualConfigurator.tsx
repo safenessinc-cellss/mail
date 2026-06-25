@@ -63,7 +63,7 @@ export default function DNSManualConfigurator({
     } else if (presetName === 'cloudflare_cname') {
       setType('CNAME');
       setHost('www');
-      setValue('ext.freemailhub.com');
+      setValue('ext.improvmx.com');
     } else if (presetName === 'cloudflare_a') {
       setType('A');
       setHost('@');
