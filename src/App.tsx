@@ -382,19 +382,19 @@ export default function App() {
         parseError = true;
       }
 
-      if (response.ok && !parseError) {
+      if (response.ok && !parseError && data.success && data.mx) {
         // Upgrade current domain
-        const verifiedMX = data.mx.status === 'verified';
-        const verifiedSPF = data.spf.status === 'verified';
-        const verifiedDKIM = data.dkim.status === 'verified';
-        const verifiedDMARC = data.dmarc.status === 'verified';
+        const verifiedMX = data.mx?.status === 'verified';
+        const verifiedSPF = data.spf?.status === 'verified';
+        const verifiedDKIM = data.dkim?.status === 'verified';
+        const verifiedDMARC = data.dmarc?.status === 'verified';
 
         const updatedDomain: Domain = {
           ...domain,
-          mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx.currentValue },
-          spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf.currentValue },
-          dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim.currentValue },
-          dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc.currentValue },
+          mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue },
+          spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
+          dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
+          dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
           verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
         };
 
