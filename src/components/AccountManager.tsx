@@ -87,11 +87,11 @@ export default function AccountManager({
 
   // Dynamic config solver based on device and currently selected mailbox parameters
   const getConfigData = (device: string) => {
-    const imapHostVal = selectedAlias?.imapHost || 'mail.freemailhub.com';
+    const imapHostVal = selectedAlias?.imapHost || 'imap.gmail.com';
     const imapPortVal = selectedAlias?.imapPort?.toString() || '993';
     const imapSec = imapPortVal === '993' ? 'SSL/TLS' : 'SSL/TLS';
 
-    const smtpHostVal = selectedAlias?.smtpHost || 'mail.freemailhub.com';
+    const smtpHostVal = selectedAlias?.smtpHost || 'smtp.resend.com';
     const smtpPortVal = selectedAlias?.smtpPort?.toString() || '587';
     const smtpSec = selectedAlias?.smtpSecure !== undefined 
       ? (selectedAlias.smtpSecure ? 'SSL/TLS' : 'STARTTLS') 
@@ -168,9 +168,9 @@ Usuario: ${config.email}`;
     const parts = cleanEmail.split("@");
     const alias = parts[0] || "user";
 
-    const finalImapHost = selectedAlias.imapHost || "mail.freemailhub.com";
+    const finalImapHost = selectedAlias.imapHost || "imap.gmail.com";
     const finalImapPort = selectedAlias.imapPort || 993;
-    const finalSmtpHost = selectedAlias.smtpHost || "mail.freemailhub.com";
+    const finalSmtpHost = selectedAlias.smtpHost || "smtp.resend.com";
     const finalSmtpPort = selectedAlias.smtpPort || 587;
     const finalSmtpSecure = selectedAlias.smtpSecure !== undefined ? selectedAlias.smtpSecure : false;
 
@@ -216,7 +216,7 @@ Usuario: ${config.email}`;
 <key>OutgoingPassword</key><string>${emailPassword}</string>
 <key>PayloadDescription</key><string>Configuración automática para FreeMail Hub</string>
 <key>PayloadDisplayName</key><string>FreeMail - ${alias}</string>
-<key>PayloadIdentifier</key><string>com.freemailhub.mail.${alias}</string>
+<key>PayloadIdentifier</key><string>com.improvmx.mail.${alias}</string>
 <key>PayloadType</key><string>com.apple.mail.managed</string>
 <key>PayloadUUID</key><string>${mailUuid}</string>
 <key>PayloadVersion</key><integer>1</integer>
@@ -226,7 +226,7 @@ Usuario: ${config.email}`;
 </array>
 <key>PayloadDescription</key><string>Configuración de correo electrónico para FreeMail Hub.</string>
 <key>PayloadDisplayName</key><string>Configuración Correo FreeMail Hub</string>
-<key>PayloadIdentifier</key><string>com.freemailhub.profile.${alias}</string>
+<key>PayloadIdentifier</key><string>com.improvmx.profile.${alias}</string>
 <key>PayloadOrganization</key><string>FreeMail Hub</string>
 <key>PayloadType</key><string>Configuration</string>
 <key>PayloadUUID</key><string>${profileUuid}</string>
@@ -284,9 +284,9 @@ Usuario: ${config.email}`;
           email: selectedAlias.address,
           password: emailPassword,
           displayName: selectedAlias.localPart.charAt(0).toUpperCase() + selectedAlias.localPart.slice(1),
-          imapHost: selectedAlias.imapHost || "mail.freemailhub.com",
+          imapHost: selectedAlias.imapHost || "imap.gmail.com",
           imapPort: selectedAlias.imapPort || 993,
-          smtpHost: selectedAlias.smtpHost || "mail.freemailhub.com",
+          smtpHost: selectedAlias.smtpHost || "smtp.resend.com",
           smtpPort: selectedAlias.smtpPort || 587,
           smtpSecure: selectedAlias.smtpSecure !== undefined ? selectedAlias.smtpSecure : false
         })
