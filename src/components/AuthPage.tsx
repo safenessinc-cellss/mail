@@ -357,3 +357,4 @@ export default function AuthPage({ onAuthSuccess, onBackToLanding, onDemoBypass 
     </div>
   );
 }
+
