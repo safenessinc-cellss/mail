@@ -18,7 +18,8 @@ import {
   updateProfile 
 } from 'firebase/auth';
 import { Mail, Shield, AlertTriangle, ArrowLeft, Loader2, Sparkles, Key, ChevronRight } from 'lucide-react';
-import DnsParticles from "./DnsParticles";
+// ✅ CORREGIDO: Importación correcta del componente renombrado
+import DnsParticles from './DnsParticles';
 
 interface AuthPageProps {
   onAuthSuccess: (user: any) => void;
@@ -150,8 +151,8 @@ export default function AuthPage({ onAuthSuccess, onBackToLanding, onDemoBypass 
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4 relative overflow-hidden">
-      {/* Interactive Spaceship Particles */}
-      <ParticlesBackground />
+      {/* ✅ CORREGIDO: Uso correcto del componente */}
+      <DnsParticles />
 
       <div className="absolute top-1/4 left-1/4 w-[400px] h-[400px] bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-pink-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -357,4 +358,3 @@ export default function AuthPage({ onAuthSuccess, onBackToLanding, onDemoBypass 
     </div>
   );
 }
-
