@@ -34,7 +34,7 @@ app.use((req, res, next) => {
 
 const SMTP_CONFIG = {
   host: process.env.SMTP_HOST || "smtp.resend.com",
-  port: parseInt(process.env.SMTP_PORT || "465"),
+  port: parseInt(process.env.SMTP_PORT || "587"),
   secure: process.env.SMTP_SECURE === 'true',
   user: process.env.SMTP_USER || "resend",
   pass: process.env.SMTP_PASS || process.env.RESEND_API_KEY || "",
