@@ -264,12 +264,7 @@ export default function App() {
       dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: `v=DMARC1; p=none; rua=mailto:dmarc@${domainName}`, status: 'pending' }
     };
 
-    if (isDemoMode) {
-      setDomain(newDomain);
-    } else {
-      // Guardar en memoria local (sin Firestore)
-      setDomain(newDomain);
-    }
+    setDomain(newDomain);
     setDbLoading(false);
   };
 
@@ -323,14 +318,10 @@ export default function App() {
         spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
         dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
         dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
-        verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
+        verified: verifiedMX && verifiedSPF
       };
 
-      if (isDemoMode) {
-        setDomain(updatedDomain);
-      } else {
-        setDomain(updatedDomain);
-      }
+      setDomain(updatedDomain);
 
       if (updatedDomain.verified) {
         alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
@@ -356,21 +347,13 @@ export default function App() {
       dmarcRecord: { ...domain.dmarcRecord, status: 'verified' }
     };
 
-    if (isDemoMode) {
-      setDomain(verifiedDomain);
-    } else {
-      setDomain(verifiedDomain);
-    }
+    setDomain(verifiedDomain);
     setDbLoading(false);
     alert("¡Bypass completado! Tu dominio se encuentra activado de forma simulada para el sandbox.");
   };
 
   const handleUpdateDomain = async (updatedDomain: Domain) => {
-    if (isDemoMode) {
-      setDomain(updatedDomain);
-    } else {
-      setDomain(updatedDomain);
-    }
+    setDomain(updatedDomain);
   };
 
   const handleDeleteDomain = async () => {
@@ -378,13 +361,7 @@ export default function App() {
     if (!confirm("¿Estás seguro que deseas eliminar tu dominio y todo su contenido aliado?")) return;
     
     setDbLoading(true);
-    if (isDemoMode) {
-      clearStates();
-    } else {
-      setDomain(null);
-      setAliases([]);
-      setMessages([]);
-    }
+    clearStates();
     setDbLoading(false);
   };
 
@@ -405,7 +382,7 @@ export default function App() {
     if (!user || !domain) return;
     setDbLoading(true);
 
-    const aliasId = isDemoMode ? 'al_' + Math.random().toString(36).substring(2, 9) : 'al_' + Math.random().toString(36).substring(2, 11);
+    const aliasId = 'al_' + Math.random().toString(36).substring(2, 11);
     const newAlias: EmailAlias = {
       id: aliasId,
       domainId: domain.id,
@@ -418,23 +395,14 @@ export default function App() {
       ...customServers
     };
 
-    if (isDemoMode) {
-      setAliases(prev => [...prev, newAlias]);
-    } else {
-      setAliases(prev => [...prev, newAlias]);
-    }
+    setAliases(prev => [...prev, newAlias]);
     setDbLoading(false);
   };
 
   const handleDeleteAlias = async (aliasId: string) => {
     if (!confirm("¿Estás seguro que deseas remover esta casilla alias? Dejará de recibir correos.")) return;
     setDbLoading(true);
-
-    if (isDemoMode) {
-      setAliases(prev => prev.filter(a => a.id !== aliasId));
-    } else {
-      setAliases(prev => prev.filter(a => a.id !== aliasId));
-    }
+    setAliases(prev => prev.filter(a => a.id !== aliasId));
     setDbLoading(false);
   };
 
@@ -513,25 +481,13 @@ export default function App() {
     // Simple storage metric accumulation
     const bytesSize = JSON.stringify(newMsg).length;
 
-    if (isDemoMode) {
-      setMessages(prev => [newMsg, ...prev]);
-      if (userProfile) {
-        setUserProfile({
-          ...userProfile,
-          storageUsedBytes: userProfile.storageUsedBytes + bytesSize,
-          dailySentCount: userProfile.dailySentCount + 1
-        });
-      }
-    } else {
-      // Guardar en memoria local
-      setMessages(prev => [newMsg, ...prev]);
-      if (userProfile) {
-        setUserProfile({
-          ...userProfile,
-          storageUsedBytes: userProfile.storageUsedBytes + bytesSize,
-          dailySentCount: userProfile.dailySentCount + 1
-        });
-      }
+    setMessages(prev => [newMsg, ...prev]);
+    if (userProfile) {
+      setUserProfile({
+        ...userProfile,
+        storageUsedBytes: userProfile.storageUsedBytes + bytesSize,
+        dailySentCount: userProfile.dailySentCount + 1
+      });
     }
     setDbLoading(false);
   };
@@ -550,22 +506,12 @@ export default function App() {
 
     const bytesSize = JSON.stringify(newMsg).length;
 
-    if (isDemoMode) {
-      setMessages(prev => [newMsg, ...prev]);
-      if (userProfile) {
-        setUserProfile({
-          ...userProfile,
-          storageUsedBytes: userProfile.storageUsedBytes + bytesSize
-        });
-      }
-    } else {
-      setMessages(prev => [newMsg, ...prev]);
-      if (userProfile) {
-        setUserProfile({
-          ...userProfile,
-          storageUsedBytes: userProfile.storageUsedBytes + bytesSize
-        });
-      }
+    setMessages(prev => [newMsg, ...prev]);
+    if (userProfile) {
+      setUserProfile({
+        ...userProfile,
+        storageUsedBytes: userProfile.storageUsedBytes + bytesSize
+      });
     }
     setDbLoading(false);
   };
@@ -573,20 +519,16 @@ export default function App() {
   // ✅ CORREGIDO: Usa la API en lugar de Firestore
   const handleDeleteMessage = async (msgId: string) => {
     setDbLoading(true);
-    if (isDemoMode) {
-      setMessages(prev => prev.filter(m => m.id !== msgId));
-    } else {
-      try {
-        const response = await fetch(`/api/mail/inbox/${msgId}`, {
-          method: 'DELETE',
-        });
-        const data = await response.json();
-        if (data.success) {
-          setMessages(prev => prev.filter(m => m.id !== msgId));
-        }
-      } catch (e) {
-        console.error(e);
+    try {
+      const response = await fetch(`/api/mail/inbox/${msgId}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+      if (data.success) {
+        setMessages(prev => prev.filter(m => m.id !== msgId));
       }
+    } catch (e) {
+      console.error(e);
     }
     setDbLoading(false);
   };
@@ -596,39 +538,29 @@ export default function App() {
     // Optimistic frontend updates
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read } : m));
 
-    if (!isDemoMode && user) {
-      try {
-        const response = await fetch(`/api/mail/inbox/${msgId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ read }),
-        });
-        const data = await response.json();
-        if (!data.success) {
-          console.error('Error marking message as read:', data.error);
-          // Revertir cambio optimista si falla
-          setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read: !read } : m));
-        }
-      } catch (e) {
-        console.error(e);
+    try {
+      const response = await fetch(`/api/mail/inbox/${msgId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ read }),
+      });
+      const data = await response.json();
+      if (!data.success) {
+        console.error('Error marking message as read:', data.error);
         // Revertir cambio optimista si falla
         setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read: !read } : m));
       }
+    } catch (e) {
+      console.error(e);
+      // Revertir cambio optimista si falla
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read: !read } : m));
     }
   };
 
   const handleUpdateMessageFolder = async (msgId: string, folder: 'inbox' | 'sent' | 'archive' | 'trash') => {
     // Optimistic frontend updates
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, folder } : m));
-
-    if (!isDemoMode && user) {
-      try {
-        // Solo actualizar localmente (sin Firestore)
-        console.log(`Mensaje ${msgId} movido a ${folder}`);
-      } catch (e) {
-        console.error("Error setting folder:", e);
-      }
-    }
+    console.log(`Mensaje ${msgId} movido a ${folder}`);
   };
 
   const handleSyncIMAP = async (aliasAddress: string) => {
@@ -771,21 +703,13 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    if (isDemoMode) {
-      setContacts(prev => [...prev, newContact]);
-    } else {
-      setContacts(prev => [...prev, newContact]);
-    }
+    setContacts(prev => [...prev, newContact]);
     setDbLoading(false);
   };
 
   const handleDeleteContact = async (contactId: string) => {
     setDbLoading(true);
-    if (isDemoMode) {
-      setContacts(prev => prev.filter(c => c.id !== contactId));
-    } else {
-      setContacts(prev => prev.filter(c => c.id !== contactId));
-    }
+    setContacts(prev => prev.filter(c => c.id !== contactId));
     setDbLoading(false);
   };
 
@@ -802,11 +726,7 @@ export default function App() {
       createdAt: new Date().toISOString()
     }));
 
-    if (isDemoMode) {
-      setContacts(prev => [...prev, ...mapped]);
-    } else {
-      setContacts(prev => [...prev, ...mapped]);
-    }
+    setContacts(prev => [...prev, ...mapped]);
     setDbLoading(false);
   };
 
@@ -846,11 +766,9 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-200">
       
-      {/* 
-        ======================================================
-        1. NOT LOGGED IN WRAPPER
-        ======================================================
-      */}
+      {/* ====================================================== */}
+      {/* 1. NOT LOGGED IN WRAPPER */}
+      {/* ====================================================== */}
       {currentView === 'landing' && (
         <LandingPage 
           onGetStarted={() => setCurrentView('webmail')} 
@@ -870,11 +788,9 @@ export default function App() {
         />
       )}
 
-      {/* 
-        ======================================================
-        2. LOGGED IN DASHBOARD CONSOLE (WORKSPACE WRAPPER)
-        ======================================================
-      */}
+      {/* ====================================================== */}
+      {/* 2. LOGGED IN DASHBOARD CONSOLE */}
+      {/* ====================================================== */}
       {user && (
         <div className="flex-1 flex flex-col">
           
@@ -901,7 +817,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Profile actions, dark/light selectors, indicators */}
+                {/* Profile actions */}
                 <div className="flex items-center space-x-4">
                   <div className="hidden md:flex flex-col text-right text-xs">
                     <span className="font-semibold text-slate-750 dark:text-slate-200">
@@ -1060,15 +976,11 @@ export default function App() {
               />
             )}
 
-            {/* 
-              ======================================================
-              3. PUBLISH AND EXPORT GITHUB DOCKER CARD TAB
-              ======================================================
-            */}
+            {/* Publish and Export */}
             {currentView === 'publish' && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 
-                {/* Cloud Run deployment instructions and trigger console */}
+                {/* Cloud Run deployment */}
                 <div className="bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-800 rounded-3xl p-6 space-y-6 shadow-sm">
                   <div>
                     <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center">
@@ -1129,7 +1041,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Export to GitHub instructions */}
+                {/* Export to GitHub */}
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 space-y-6 flex flex-col justify-between shadow-sm">
                   <div className="space-y-4">
                     <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center">
