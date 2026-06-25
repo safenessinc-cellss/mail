@@ -66,9 +66,9 @@ function buildClientMobileConfigPayload(params: any): string {
   const alias = parts[0] || "user";
   const domainName = parts[1] || "domain.com";
 
-  const finalImapHost = imapHost ? String(imapHost).trim() : `mail.freemailhub.com`;
+  const finalImapHost = imapHost ? String(imapHost).trim() : `imap.gmail.com`;
   const finalImapPort = imapPort ? Number(imapPort) : 993;
-  const finalSmtpHost = smtpHost ? String(smtpHost).trim() : `mail.freemailhub.com`;
+  const finalSmtpHost = smtpHost ? String(smtpHost).trim() : `smtp.resend.com`;
   const finalSmtpPort = smtpPort ? Number(smtpPort) : 587;
   const finalSmtpSecure = smtpSecure !== undefined ? Boolean(smtpSecure) : false;
 
@@ -84,7 +84,7 @@ function buildClientMobileConfigPayload(params: any): string {
 `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` +
 `<plist version="1.0">` +
 `<dict>` +
-`<key>ConsentText</key><dict><key>default</key><string>Configuración automática de correo para FreeMail Hub</string></dict>` +
+`<key>ConsentText</key><dict><key>default</key><string>Configuración automática de correo para ImprovMX & Resend</string></dict>` +
 `<key>PayloadContent</key>` +
 `<array>` +
 `<dict>` +
@@ -106,7 +106,7 @@ function buildClientMobileConfigPayload(params: any): string {
 `<key>OutgoingPassword</key><string>${password}</string>` +
 `<key>PayloadDescription</key><string>Configuración automática para FreeMail Hub</string>` +
 `<key>PayloadDisplayName</key><string>FreeMail - ${alias}</string>` +
-`<key>PayloadIdentifier</key><string>com.freemailhub.mail.${alias}</string>` +
+`<key>PayloadIdentifier</key><string>com.improvmx.mail.${alias}</string>` +
 `<key>PayloadType</key><string>com.apple.mail.managed</string>` +
 `<key>PayloadUUID</key><string>${mailUuid}</string>` +
 `<key>PayloadVersion</key><integer>1</integer>` +
@@ -116,7 +116,7 @@ function buildClientMobileConfigPayload(params: any): string {
 `</array>` +
 `<key>PayloadDescription</key><string>Configuración de correo electrónico para FreeMail Hub.</string>` +
 `<key>PayloadDisplayName</key><string>Configuración Correo FreeMail Hub</string>` +
-`<key>PayloadIdentifier</key><string>com.freemailhub.profile.${alias}</string>` +
+`<key>PayloadIdentifier</key><string>com.improvmx.profile.${alias}</string>` +
 `<key>PayloadOrganization</key><string>FreeMail Hub</string>` +
 `<key>PayloadType</key><string>Configuration</string>` +
 `<key>PayloadUUID</key><string>${profileUuid}</string>` +
@@ -261,9 +261,9 @@ export default function SettingsView({
             email: finalEmail,
             password: qrPassword,
             displayName: finalDisplayName,
-            imapHost: "mail.freemailhub.com",
+            imapHost: "imap.gmail.com",
             imapPort: 993,
-            smtpHost: "mail.freemailhub.com",
+            smtpHost: "smtp.resend.com",
             smtpPort: 587,
             smtpSecure: false
           })
@@ -297,7 +297,7 @@ export default function SettingsView({
         setQrValue(outlookInstructionsUrl);
       } else {
         // Manual Configuration Redirect
-        const manualGuideUrl = `https://mail.freemailhub.com/manual-guide-instructions`;
+        const manualGuideUrl = `https://improvmx.com/guides/`;
         setQrValue(manualGuideUrl);
       }
     } catch (err: any) {
@@ -322,9 +322,9 @@ export default function SettingsView({
         email: finalEmail,
         password: qrPassword,
         displayName: finalDisplayName,
-        imapHost: "mail.freemailhub.com",
+        imapHost: "imap.gmail.com",
         imapPort: 993,
-        smtpHost: "mail.freemailhub.com",
+        smtpHost: "smtp.resend.com",
         smtpPort: 587,
         smtpSecure: false
       });
@@ -348,7 +348,7 @@ export default function SettingsView({
     // Generate Outlook Profile content dynamically
     const parts = qrSelectedEmail.split('@');
     const userLocal = parts[0] || 'usuario';
-    const userDomain = parts[1] || 'freemailhub.com';
+    const userDomain = parts[1] || 'improvmx.com';
 
     const prfContent = `; FREEMAIL HUB Outlook Profile Auto-Configuration
 [General]
@@ -360,7 +360,7 @@ OverwriteProfile=Yes
 [Service1]
 UniqueName=MSF_IMAP
 ServiceName=IMAP
-IMAPServer=mail.freemailhub.com
+IMAPServer=imap.gmail.com
 IMAPPort=993
 IMAPSSL=Yes
 IMAPUser=${qrSelectedEmail}
@@ -368,7 +368,7 @@ IMAPUser=${qrSelectedEmail}
 [Service2]
 UniqueName=MSF_SMTP
 ServiceName=SMTP
-SMTPServer=mail.freemailhub.com
+SMTPServer=smtp.resend.com
 SMTPPort=587
 SMTPSSL=STARTTLS
 SMTPUser=${qrSelectedEmail}
@@ -603,35 +603,35 @@ SMTPUser=${qrSelectedEmail}
               <p className="text-xs text-slate-400 mt-1 font-light">Implementa las siguientes especificaciones técnicas para enlazar clientes externos.</p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-5 bg-slate-955 rounded-2xl border border-slate-800 flex flex-col justify-between">
-                <div>
-                  <span className="text-[10px] bg-cyan-950/40 text-cyan-400 border border-cyan-500/20 font-bold px-2.5 py-0.5 rounded uppercase tracking-wider font-mono">
-                    PROT. ENTRADA (IMAP)
-                  </span>
-                  <div className="space-y-2 mt-4 text-xs font-light">
-                    <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Servidor:</span> <strong className="text-white">mail.freemailhub.com</strong></p>
-                    <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Puerto IMAP:</span> <strong className="text-white">993</strong></p>
-                    <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Cifrado (Seguridad):</span> <strong className="text-white">SSL / TLS</strong></p>
-                    <p className="flex justify-between font-mono py-1"><span className="text-slate-500">Método de Acceso:</span> <strong className="text-white">Contraseña de Buzón</strong></p>
-                  </div>
-                </div>
-              </div>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               <div className="p-5 bg-slate-955 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                 <div>
+                   <span className="text-[10px] bg-cyan-950/40 text-cyan-400 border border-cyan-500/20 font-bold px-2.5 py-0.5 rounded uppercase tracking-wider font-mono">
+                     PROT. ENTRADA (ImprovMX Reenvío)
+                   </span>
+                   <div className="space-y-2 mt-4 text-xs font-light">
+                     <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Servidor Redirección:</span> <strong className="text-white">mx1.improvmx.com</strong></p>
+                     <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Destino:</span> <strong className="text-white">Tu correo personal (Gmail, etc.)</strong></p>
+                     <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">IMAP Externo:</span> <strong className="text-white">Usa el de tu correo personal</strong></p>
+                     <p className="flex justify-between font-mono py-1"><span className="text-slate-500">Método:</span> <strong className="text-white">Reenvío transparente de aliases</strong></p>
+                   </div>
+                 </div>
+               </div>
 
-              <div className="p-5 bg-slate-955 rounded-2xl border border-slate-800 flex flex-col justify-between">
-                <div>
-                  <span className="text-[10px] bg-pink-950/40 text-pink-400 border border-pink-500/20 font-bold px-2.5 py-0.5 rounded uppercase tracking-wider font-mono">
-                    PROT. SALIDA (SMTP)
-                  </span>
-                  <div className="space-y-2 mt-4 text-xs font-light">
-                    <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Servidor:</span> <strong className="text-white">mail.freemailhub.com</strong></p>
-                    <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Puerto SMTP:</span> <strong className="text-white">587</strong></p>
-                    <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Cifrado (Seguridad):</span> <strong className="text-white">STARTTLS (Recomendado) / 465 (Alternative SSL)</strong></p>
-                    <p className="flex justify-between font-mono py-1"><span className="text-slate-500">Autenticación SMTP:</span> <strong className="text-white">Requerida (Contraseña)</strong></p>
-                  </div>
-                </div>
-              </div>
-            </div>
+               <div className="p-5 bg-slate-955 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                 <div>
+                   <span className="text-[10px] bg-pink-950/40 text-pink-400 border border-pink-500/20 font-bold px-2.5 py-0.5 rounded uppercase tracking-wider font-mono">
+                     PROT. SALIDA (Resend SMTP)
+                   </span>
+                   <div className="space-y-2 mt-4 text-xs font-light">
+                     <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Servidor SMTP:</span> <strong className="text-white">smtp.resend.com</strong></p>
+                     <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Puerto SMTP:</span> <strong className="text-white">587</strong></p>
+                     <p className="flex justify-between font-mono py-1 border-b border-slate-900"><span className="text-slate-500">Cifrado (Seguridad):</span> <strong className="text-white">STARTTLS (Recomendado) / 465 (SSL)</strong></p>
+                     <p className="flex justify-between font-mono py-1"><span className="text-slate-500">Autenticación SMTP:</span> <strong className="text-white">Requerida (API Key como Pass)</strong></p>
+                   </div>
+                 </div>
+               </div>
+             </div>
 
             <div className="mt-8">
               <h4 className="text-xs font-bold text-slate-350 uppercase tracking-widest font-mono mb-3">TABLA DE COMPATIBILIDAD CON CLIENTES NATIVOS</h4>
@@ -648,32 +648,32 @@ SMTPUser=${qrSelectedEmail}
                   <tbody className="divide-y divide-slate-850 font-light text-slate-300">
                     <tr>
                       <td className="p-3 font-semibold text-white">Apple Mail</td>
-                      <td className="p-3">mail.freemailhub.com : 993</td>
-                      <td className="p-3">mail.freemailhub.com : 587</td>
+                      <td className="p-3">imap.gmail.com : 993</td>
+                      <td className="p-3">smtp.resend.com : 587</td>
                       <td className="p-3 font-mono text-[10px]">SSL/TLS, STARTTLS</td>
                     </tr>
                     <tr>
                       <td className="p-3 font-semibold text-white">Gmail App</td>
-                      <td className="p-3">mail.freemailhub.com : 993</td>
-                      <td className="p-3">mail.freemailhub.com : 587</td>
+                      <td className="p-3">imap.gmail.com : 993</td>
+                      <td className="p-3">smtp.resend.com : 587</td>
                       <td className="p-3 font-mono text-[10px]">SSL/TLS, STARTTLS</td>
                     </tr>
                     <tr>
                       <td className="p-3 font-semibold text-white">Outlook Mac/PC</td>
-                      <td className="p-3">mail.freemailhub.com : 993</td>
-                      <td className="p-3">mail.freemailhub.com : 587</td>
+                      <td className="p-3">imap.gmail.com : 993</td>
+                      <td className="p-3">smtp.resend.com : 587</td>
                       <td className="p-3 font-mono text-[10px]">SSL/TLS, STARTTLS</td>
                     </tr>
                     <tr>
                       <td className="p-3 font-semibold text-white">Samsung Email</td>
-                      <td className="p-3">mail.freemailhub.com : 993</td>
-                      <td className="p-3">mail.freemailhub.com : 587</td>
+                      <td className="p-3">imap.gmail.com : 993</td>
+                      <td className="p-3">smtp.resend.com : 587</td>
                       <td className="p-3 font-mono text-[10px]">SSL/TLS, STARTTLS</td>
                     </tr>
                     <tr>
                       <td className="p-3 font-semibold text-white">Thunderbird</td>
-                      <td className="p-3">mail.freemailhub.com : 993</td>
-                      <td className="p-3">mail.freemailhub.com : 587</td>
+                      <td className="p-3">imap.gmail.com : 993</td>
+                      <td className="p-3">smtp.resend.com : 587</td>
                       <td className="p-3 font-mono text-[10px]">SSL/TLS, STARTTLS</td>
                     </tr>
                   </tbody>
