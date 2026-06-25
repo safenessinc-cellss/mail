@@ -27,7 +27,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -116,7 +116,9 @@ app.post("/api/mail/webhook", async (req, res) => {
       html: html,
       attachments: attachments,
       createdAt: createdAt,
-      receivedAt: new Date().toISOString()
+      receivedAt: new Date().toISOString(),
+      folder: 'inbox',
+      read: false
     };
     
     console.log(`[Webhook] ✅ De: ${fromName} <${fromAddress}>`);
@@ -203,6 +205,45 @@ app.get("/api/mail/inbox/:id", (req, res) => {
 });
 
 // ============================================
+// ACTUALIZAR CORREO (Marcar como leído) ✅ NUEVO
+// ============================================
+
+app.patch("/api/mail/inbox/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { read } = req.body || {};
+    
+    console.log(`[Patch] 📝 Actualizando correo ${id}, read: ${read}`);
+    
+    const email = receivedEmails.find(e => e.id === id);
+    if (!email) {
+      return res.status(404).json({
+        success: false,
+        error: "Correo no encontrado"
+      });
+    }
+    
+    if (read !== undefined) {
+      email.read = read;
+    }
+    
+    console.log(`[Patch] ✅ Correo ${id} actualizado`);
+    
+    res.json({
+      success: true,
+      message: "Correo actualizado",
+      email
+    });
+  } catch (err: any) {
+    console.error("[Patch] ❌ Error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// ============================================
 // ELIMINAR CORREO
 // ============================================
 
@@ -220,11 +261,14 @@ app.delete("/api/mail/inbox/:id", (req, res) => {
     
     receivedEmails.splice(index, 1);
     
+    console.log(`[Delete] ✅ Correo ${id} eliminado`);
+    
     res.json({
       success: true,
       message: `Correo ${id} eliminado`
     });
   } catch (err: any) {
+    console.error("[Delete] ❌ Error:", err);
     res.status(500).json({
       success: false,
       error: err.message
@@ -399,6 +443,8 @@ app.get("/api", (_req, res) => {
       "/api/mail/webhook",
       "/api/mail/inbox",
       "/api/mail/inbox/:id",
+      "/api/mail/inbox/:id (PATCH)",
+      "/api/mail/inbox/:id (DELETE)",
       "/api/ai/draft",
       "/api/dns/verify-dns"
     ]
