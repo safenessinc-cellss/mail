@@ -22,10 +22,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================
-// 1. MIDDLEWARE CONFIGURATION (CORREGIDO)
+// 1. MIDDLEWARE CONFIGURATION
 // ============================================
 
-// CORS y headers de seguridad
 app.use((req, res, next) => {
   // Normalizar URL para Vercel
   if (req.url && !req.url.startsWith("/api/") && req.url !== "/" && !req.url.startsWith("/assets/") && !req.url.startsWith("/favicon.ico")) {
@@ -45,7 +44,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Parseo de JSON (CORREGIDO: más robusto)
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
@@ -94,16 +92,13 @@ function getRawBody(req: express.Request): Promise<string> {
 }
 
 // ============================================
-// 3. CONFIGURACIÓN SMTP (¡NUEVA Y CORREGIDA!)
+// 3. CONFIGURACIÓN SMTP
 // ============================================
 
 function getSmtpConfig(reqBody: any) {
-  // Prioridad: 1. Variables de entorno, 2. Parámetros del request, 3. Valores por defecto
   const host = process.env.SMTP_HOST || reqBody.smtpHost || "smtp.resend.com";
   const port = parseInt(process.env.SMTP_PORT || reqBody.smtpPort || "465");
   const secure = process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : (port === 465);
-  
-  // Resend usa 'resend' como usuario y la API Key como contraseña
   const user = process.env.SMTP_USER || reqBody.smtpUser || "resend";
   const pass = process.env.SMTP_PASS || process.env.RESEND_API_KEY || reqBody.senderPassword || "";
   
@@ -111,7 +106,7 @@ function getSmtpConfig(reqBody: any) {
 }
 
 // ============================================
-// 4. CLIENTE GEMINI (LAZY LOADING)
+// 4. CLIENTE GEMINI
 // ============================================
 
 let aiClient: GoogleGenAI | null = null;
@@ -164,7 +159,7 @@ function decryptConfig(token: string): any {
 }
 
 // ============================================
-// 6. APPLE PROFILES (CÓDIGO COMPLETO)
+// 6. APPLE PROFILES
 // ============================================
 
 function buildMobileConfigPayload(params: any): string {
@@ -206,7 +201,6 @@ function buildMobileConfigPayload(params: any): string {
             <key>EmailAddress</key>
             <string>${cleanEmail}</string>
             
-            <!-- Incoming Mail (IMAP) -->
             <key>IncomingMailServerAuthentication</key>
             <string>EmailAuthPassword</string>
             <key>IncomingMailServerHostName</key>
@@ -220,7 +214,6 @@ function buildMobileConfigPayload(params: any): string {
             <key>IncomingPassword</key>
             <string>${password}</string>
             
-            <!-- Outgoing Mail (SMTP) -->
             <key>OutgoingMailServerAuthentication</key>
             <string>EmailAuthPassword</string>
             <key>OutgoingMailServerHostName</key>
@@ -234,7 +227,6 @@ function buildMobileConfigPayload(params: any): string {
             <key>OutgoingPassword</key>
             <string>${password}</string>
             
-            <!-- Metadata -->
             <key>PayloadDescription</key>
             <string>Configuración automática para FreeMail Hub</string>
             <key>PayloadDisplayName</key>
@@ -315,7 +307,13 @@ function signProfileWithOpenSSL(plistXml: string, alias: string, res: express.Re
 
 // Health check
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
+  res.json({ 
+    status: "ok", 
+    time: new Date().toISOString(),
+    env: process.env.NODE_ENV || 'development',
+    smtp_configured: !!process.env.SMTP_PASS || !!process.env.RESEND_API_KEY,
+    gemini_configured: !!process.env.GEMINI_API_KEY
+  });
 });
 
 // ============================================
@@ -611,24 +609,6 @@ async function resolveTxtSecurely(domain: string): Promise<string[][]> {
   return rawList.map(str => [str]);
 }
 
-async function resolve4Securely(domain: string): Promise<string[]> {
-  try {
-    const native = await dns.promises.resolve4(domain);
-    if (native && native.length > 0) return native;
-  } catch (_e) {}
-
-  return await resolveDnsViaDoH(domain, "A");
-}
-
-async function resolveCnameSecurely(domain: string): Promise<string[]> {
-  try {
-    const native = await dns.promises.resolveCname(domain);
-    if (native && native.length > 0) return native;
-  } catch (_e) {}
-
-  return await resolveDnsViaDoH(domain, "CNAME");
-}
-
 app.use("/api/dns", dnsRoutes);
 
 app.post("/api/dns/verify-dns", async (req, res) => {
@@ -776,19 +756,19 @@ app.post("/api/dns/verify-custom", async (req, res) => {
 
   try {
     if (recordType === "A") {
-      const ips = await resolve4Securely(queryHost);
+      const ips = await dns.promises.resolve4(queryHost).catch(() => []);
       currentValue = ips.join(", ");
       if (ips.some(ip => ip === expectedValue)) {
         status = "verified";
       }
     } else if (recordType === "CNAME") {
-      const targets = await resolveCnameSecurely(queryHost);
+      const targets = await dns.promises.resolveCname(queryHost).catch(() => []);
       currentValue = targets.join(", ");
       if (targets.some(t => t.toLowerCase() === expectedValue.toLowerCase() || t.toLowerCase() === `${expectedValue.toLowerCase()}.`)) {
         status = "verified";
       }
     } else if (recordType === "TXT") {
-      const txtRecords = await resolveTxtSecurely(queryHost);
+      const txtRecords = await dns.promises.resolveTxt(queryHost).catch(() => []);
       const flattened = txtRecords.flat();
       currentValue = flattened.join(", ");
       if (flattened.some(txt => txt.includes(expectedValue) || expectedValue.includes(txt))) {
@@ -805,7 +785,7 @@ app.post("/api/dns/verify-custom", async (req, res) => {
 });
 
 // ============================================
-// 7d. SMTP SEND ROUTE (¡CORREGIDA!)
+// 7d. SMTP SEND ROUTE (CORREGIDA Y FUNCIONAL)
 // ============================================
 
 app.post("/api/mail/send", async (req, res) => {
@@ -814,28 +794,25 @@ app.post("/api/mail/send", async (req, res) => {
     
     const { senderEmail, senderPassword, to, subject, body, attachments } = req.body || {};
     
-    // Validaciones básicas
     if (!senderEmail || !to) {
       return res.status(400).json({ 
         success: false, 
-        error: "Faltan campos obligatorios: senderEmail y to son requeridos" 
+        error: "senderEmail y to son requeridos" 
       });
     }
 
-    // Obtener configuración SMTP
     const { host, port, secure, user, pass } = getSmtpConfig(req.body);
     
-    console.log(`[SMTP] Configuración: host=${host}, port=${port}, secure=${secure}, user=${user}`);
+    console.log(`[SMTP] Configuración: host=${host}, port=${port}, secure=${secure}`);
 
     if (!pass) {
       console.error("[SMTP] Error: Contraseña SMTP no configurada");
       return res.status(400).json({
         success: false,
-        error: "Contraseña SMTP no configurada. Verifica SMTP_PASS o RESEND_API_KEY en variables de entorno."
+        error: "Contraseña SMTP no configurada. Verifica SMTP_PASS o RESEND_API_KEY."
       });
     }
 
-    // Crear transporter
     const transporter = nodemailer.createTransport({
       host,
       port,
@@ -863,7 +840,6 @@ app.post("/api/mail/send", async (req, res) => {
       });
     }
 
-    // Preparar correo
     const mailOptions: any = {
       from: `"${senderEmail.split('@')[0]}" <${senderEmail}>`,
       to,
@@ -872,7 +848,6 @@ app.post("/api/mail/send", async (req, res) => {
       html: (body || "").replace(/\n/g, "<br/>"),
     };
 
-    // Manejar adjuntos
     if (attachments && attachments.length > 0) {
       mailOptions.attachments = attachments.map((att: any) => {
         if (att && att.content && typeof att.content === "string") {
@@ -892,7 +867,6 @@ app.post("/api/mail/send", async (req, res) => {
       });
     }
 
-    // Enviar
     const info = await transporter.sendMail(mailOptions);
     console.log(`[SMTP] Correo enviado exitosamente. MessageId: ${info.messageId}`);
     
@@ -1018,7 +992,6 @@ app.post("/api/ai/draft", async (req, res) => {
     const ai = getGeminiClient();
     
     if (!ai) {
-      // Modo simulación
       const simulatedSubjects: Record<string, string> = {
         professional: "Propuesta de colaboración comercial",
         formal: "Solicitud de información oficial",
@@ -1086,44 +1059,37 @@ app.post("/api/ai/draft", async (req, res) => {
 });
 
 // ============================================
-// 8. SERVIDOR
+// 8. RUTA PRINCIPAL (Para Vercel)
 // ============================================
 
-async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    try {
-      const { createServer: createViteServer } = await import("vite");
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      app.use(vite.middlewares);
-    } catch (_err) {
-      console.warn("Vite no disponible en modo producción");
-    }
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    if (fs.existsSync(distPath)) {
-      app.use(express.static(distPath));
-      app.get("*", (_req, res) => {
-        res.sendFile(path.join(distPath, "index.html"));
-      });
-    } else {
-      console.warn("Carpeta dist no encontrada");
-    }
-  }
+app.get("*", (_req, res) => {
+  res.status(200).json({
+    message: "FreeMail Hub API funcionando correctamente",
+    version: "2.0.0",
+    endpoints: [
+      "/api/health",
+      "/api/dns/verify-dns",
+      "/api/mail/send",
+      "/api/mail/sync",
+      "/api/ai/draft",
+      "/api/profile/generate",
+      "/api/profile/qr-token"
+    ]
+  });
+});
 
-  app.listen(PORT, "0.0.0.0", () => {
+// ============================================
+// 9. EXPORTAR PARA VERCEL
+// ============================================
+
+export default app;
+
+// Iniciar servidor local
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
     console.log(`[FreeMail Hub] Servidor corriendo en http://localhost:${PORT}`);
     console.log(`[FreeMail Hub] Configuración SMTP: ${process.env.SMTP_HOST || 'smtp.resend.com'}`);
     console.log(`[FreeMail Hub] Gemini: ${process.env.GEMINI_API_KEY ? '✅ Configurado' : '❌ No configurado'}`);
+    console.log(`[FreeMail Hub] Resend: ${process.env.RESEND_API_KEY ? '✅ Configurado' : '❌ No configurado'}`);
   });
-}
-
-// Exportar para Vercel
-export default app;
-
-// Iniciar solo si no estamos en Vercel
-if (!process.env.VERCEL) {
-  startServer().catch(console.error);
 }
