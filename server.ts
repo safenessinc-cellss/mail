@@ -12,6 +12,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================
+// ALMACENAMIENTO EN MEMORIA (PARA PRUEBAS)
+// ============================================
+
+// Array para guardar los correos recibidos
+const receivedEmails: any[] = [];
+
+// ============================================
 // MIDDLEWARE
 // ============================================
 
@@ -37,8 +44,151 @@ app.get("/api/health", (_req, res) => {
     status: "ok", 
     time: new Date().toISOString(),
     env: process.env.NODE_ENV || 'development',
-    resend_configured: !!process.env.RESEND_API_KEY || !!process.env.SMTP_PASS
+    resend_configured: !!process.env.RESEND_API_KEY || !!process.env.SMTP_PASS,
+    emails_received: receivedEmails.length
   });
+});
+
+// ============================================
+// WEBHOOK PARA RECIBIR CORREOS (RESEND)
+// ============================================
+
+app.post("/api/mail/webhook", async (req, res) => {
+  try {
+    console.log("[Webhook] 📩 Correo recibido:");
+    console.log("[Webhook] Body:", JSON.stringify(req.body, null, 2));
+    
+    // Extraer datos del correo
+    const { 
+      from, 
+      to, 
+      subject, 
+      text, 
+      html, 
+      attachments,
+      createdAt,
+      id
+    } = req.body || {};
+    
+    // Validar que sea un correo válido
+    if (!from && !to) {
+      console.warn("[Webhook] ⚠️ Datos incompletos, pero continuando...");
+    }
+    
+    // Crear objeto del correo
+    const emailData = {
+      id: id || `email_${Date.now()}`,
+      from: from || 'remitente@desconocido.com',
+      to: to || 'destinatario@desconocido.com',
+      subject: subject || '(Sin Asunto)',
+      text: text || '',
+      html: html || '',
+      attachments: attachments || [],
+      createdAt: createdAt || new Date().toISOString(),
+      receivedAt: new Date().toISOString()
+    };
+    
+    // Almacenar en memoria
+    receivedEmails.unshift(emailData); // Agregar al inicio (más reciente primero)
+    
+    // Mantener solo los últimos 100 correos
+    if (receivedEmails.length > 100) {
+      receivedEmails.pop();
+    }
+    
+    console.log(`[Webhook] ✅ Correo almacenado. Total: ${receivedEmails.length}`);
+    
+    // Responder a Resend (debe ser 200 OK)
+    res.status(200).json({ 
+      success: true, 
+      message: "Correo recibido y almacenado correctamente",
+      emailId: emailData.id
+    });
+    
+  } catch (err: any) {
+    console.error("[Webhook] ❌ Error:", err);
+    // Siempre responder con 200 para evitar que Resend reintente
+    res.status(200).json({ 
+      success: false, 
+      error: err.message,
+      message: "Error procesando el correo, pero confirmamos recepción"
+    });
+  }
+});
+
+// ============================================
+// OBTENER CORREOS RECIBIDOS (PARA EL FRONTEND)
+// ============================================
+
+app.get("/api/mail/inbox", (req, res) => {
+  try {
+    // Obtener el límite de la query (default 20)
+    const limit = parseInt(req.query.limit as string) || 20;
+    
+    // Devolver los correos más recientes
+    const emails = receivedEmails.slice(0, limit);
+    
+    res.json({
+      success: true,
+      count: emails.length,
+      total: receivedEmails.length,
+      emails: emails
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// ============================================
+// OBTENER UN CORREO ESPECÍFICO POR ID
+// ============================================
+
+app.get("/api/mail/inbox/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const email = receivedEmails.find(e => e.id === id);
+    
+    if (!email) {
+      return res.status(404).json({
+        success: false,
+        error: "Correo no encontrado"
+      });
+    }
+    
+    res.json({
+      success: true,
+      email
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// ============================================
+// ELIMINAR TODOS LOS CORREOS (PARA PRUEBAS)
+// ============================================
+
+app.delete("/api/mail/inbox", (req, res) => {
+  try {
+    const count = receivedEmails.length;
+    receivedEmails.length = 0; // Vaciar el array
+    
+    res.json({
+      success: true,
+      message: `${count} correos eliminados`
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
 });
 
 // ============================================
@@ -120,7 +270,6 @@ app.post("/api/mail/send-http", async (req, res) => {
 
 app.post("/api/mail/send", async (req, res) => {
   console.log("[send] Redirigiendo a /api/mail/send-http");
-  // Reenviar la solicitud a la ruta funcional
   req.url = '/api/mail/send-http';
   app.handle(req, res);
 });
@@ -140,8 +289,8 @@ app.post("/api/dns/verify-dns", async (req, res) => {
       success: true,
       domain,
       results: {
-        mx: { status: "configured", records: [{ priority: 10, exchange: "mx1.improvmx.com" }] },
-        spf: { status: "configured", record: "v=spf1 include:spf.improvmx.com ~all" },
+        mx: { status: "configured", records: [{ priority: 10, exchange: "feedback-smtp.sa-east-1.amazonses.com" }] },
+        spf: { status: "configured", record: "v=spf1 include:amazonses.com ~all" },
         dkim: { status: "configured" },
         dmarc: { status: "configured" }
       },
@@ -183,11 +332,14 @@ app.post("/api/ai/draft", async (req, res) => {
 app.get("/api", (_req, res) => {
   res.json({
     message: "FreeMail Hub API funcionando correctamente",
-    version: "3.0.0",
+    version: "3.1.0",
     endpoints: [
       "/api/health",
       "/api/mail/send",
       "/api/mail/send-http",
+      "/api/mail/webhook",
+      "/api/mail/inbox",
+      "/api/mail/inbox/:id",
       "/api/ai/draft",
       "/api/dns/verify-dns"
     ]
@@ -217,5 +369,7 @@ if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`[FreeMail Hub] Servidor corriendo en http://localhost:${PORT}`);
     console.log(`[FreeMail Hub] API Key: ${process.env.RESEND_API_KEY || process.env.SMTP_PASS ? '✅ Configurada' : '❌ No configurada'}`);
+    console.log(`[FreeMail Hub] Webhook: POST /api/mail/webhook`);
+    console.log(`[FreeMail Hub] Inbox: GET /api/mail/inbox`);
   });
 }
