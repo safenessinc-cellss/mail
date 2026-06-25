@@ -18,7 +18,7 @@ import {
   updateProfile 
 } from 'firebase/auth';
 import { Mail, Shield, AlertTriangle, ArrowLeft, Loader2, Sparkles, Key, ChevronRight } from 'lucide-react';
-import ParticlesBackground from './ParticlesBackground';
+import DnsParticles from "./DnsParticles";
 
 interface AuthPageProps {
   onAuthSuccess: (user: any) => void;
