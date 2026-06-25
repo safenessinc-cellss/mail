@@ -21,10 +21,25 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Set Cross-Origin headers to allow popups to communicate correctly
+// Set Cross-Origin, CORS, and URL Normalization headers to allow Vercel and popups to communicate correctly
 app.use((req, res, next) => {
+  // Normalize URL for Vercel Serverless compatibility (if Vercel stripped "/api", prepend it)
+  if (req.url && !req.url.startsWith("/api/") && req.url !== "/" && !req.url.startsWith("/assets/") && !req.url.startsWith("/favicon.ico")) {
+    req.url = "/api" + req.url;
+  }
+  
+  // CORS configuration
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  
+  // COOP and COEP policies
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
   next();
 });
 
@@ -99,8 +114,8 @@ app.use((req, res, next) => {
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
   if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (apiKey && apiKey !== "MY_GEMINI_API_KEY" && apiKey !== "VITE_GEMINI_API_KEY") {
       aiClient = new GoogleGenAI({ apiKey });
     }
   }
@@ -113,7 +128,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 // Secure Encryption Helpers for QR Code tokens
-const CRYPTO_SECRET = process.env.GEMINI_API_KEY || "freemail-secret-key-salt-placeholder-9876";
+const CRYPTO_SECRET = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "freemail-secret-key-salt-placeholder-9876";
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(CRYPTO_SECRET).digest();
 const IV_LENGTH = 16;
 
