@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { QRCodeSVG as QRCode } from 'qrcode.react';
+import QRCode from 'qrcode';
 import { 
   KeyRound, 
   Smartphone, 
@@ -148,6 +148,23 @@ export default function SettingsView({
   const [qrSelectedEmail, setQrSelectedEmail] = useState('');
   const [qrPassword, setQrPassword] = useState('');
   const [qrValue, setQrValue] = useState<string | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+
+  useEffect(() => {
+    if (qrValue) {
+      QRCode.toDataURL(qrValue, { width: 176, margin: 1 })
+        .then(url => {
+          setQrDataUrl(url);
+        })
+        .catch(err => {
+          console.error('Error generating QR code:', err);
+          setQrDataUrl('');
+        });
+    } else {
+      setQrDataUrl('');
+    }
+  }, [qrValue]);
+
   const [qrToken, setQrToken] = useState<string | null>(null);
   const [isGeneratingQr, setIsGeneratingQr] = useState(false);
   const [qrError, setQrError] = useState<string | null>(null);
@@ -792,7 +809,13 @@ SMTPUser=${qrSelectedEmail}
                 {qrValue ? (
                   <div className="flex flex-col items-center space-y-4 animate-in zoom-in-95 duration-200">
                     <div className="p-3 bg-white border border-slate-800 rounded-2xl shadow-lg shrink-0">
-                      <QRCode value={qrValue} size={176} marginSize={1} />
+                      {qrDataUrl ? (
+                        <img src={qrDataUrl} alt="Configuración QR" className="w-[176px] h-[176px]" />
+                      ) : (
+                        <div className="w-[176px] h-[176px] flex items-center justify-center bg-slate-100 text-slate-400 text-xs">
+                          Generando QR...
+                        </div>
+                      )}
                     </div>
                     <div>
                       <span className="inline-block text-[9px] font-bold text-pink-400 bg-pink-950/50 px-2 py-0.5 rounded border border-pink-500/30">
