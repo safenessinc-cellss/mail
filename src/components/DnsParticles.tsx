@@ -25,4 +25,4 @@ const DnsParticles: React.FC = () => {
     );
 };
 
-export default DnsParticles;
+export default DnsParticles; // <-- ESTA LÍNEA ES CRUCIAL
