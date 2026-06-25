@@ -25,6 +25,7 @@ import {
   Award
 } from 'lucide-react';
 import DNSManualConfigurator from './DNSManualConfigurator';
+import { clientSideVerifyDns, clientSideAiExplain } from '../lib/dnsClientFallback';
 
 interface DomainManagerProps {
   domain: Domain | null;
@@ -77,30 +78,30 @@ export default function DomainManager({
       });
     }, 850);
 
-    try {
-      const recordsPayload = {
-        mx: {
-          verified: domain.mxRecord.status === 'verified',
-          current: domain.mxRecord.currentValue || 'No detectado',
-          expected: domain.mxRecord.expectedValue
-        },
-        spf: {
-          verified: domain.spfRecord.status === 'verified',
-          current: domain.spfRecord.currentValue || 'No detectado',
-          expected: domain.spfRecord.expectedValue
-        },
-        dkim: {
-          verified: domain.dkimRecord.status === 'verified',
-          current: domain.dkimRecord.currentValue || 'No detectado',
-          expected: domain.dkimRecord.expectedValue
-        },
-        dmarc: {
-          verified: domain.dmarcRecord.status === 'verified',
-          current: domain.dmarcRecord.currentValue || 'No detectado',
-          expected: domain.dmarcRecord.expectedValue
-        }
-      };
+    const recordsPayload = {
+      mx: {
+        verified: domain.mxRecord.status === 'verified',
+        current: domain.mxRecord.currentValue || 'No detectado',
+        expected: domain.mxRecord.expectedValue
+      },
+      spf: {
+        verified: domain.spfRecord.status === 'verified',
+        current: domain.spfRecord.currentValue || 'No detectado',
+        expected: domain.spfRecord.expectedValue
+      },
+      dkim: {
+        verified: domain.dkimRecord.status === 'verified',
+        current: domain.dkimRecord.currentValue || 'No detectado',
+        expected: domain.dkimRecord.expectedValue
+      },
+      dmarc: {
+        verified: domain.dmarcRecord.status === 'verified',
+        current: domain.dmarcRecord.currentValue || 'No detectado',
+        expected: domain.dmarcRecord.expectedValue
+      }
+    };
 
+    try {
       const response = await fetch('/api/dns/ai-explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -111,8 +112,13 @@ export default function DomainManager({
         })
       });
 
-      const data = await response.json();
       clearInterval(interval);
+
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
       
       if (data.success) {
         setAiLoadingStep(5);
@@ -121,14 +127,25 @@ export default function DomainManager({
           setAiLoading(false);
         }, 500);
       } else {
-        alert(data.error || "No se pudo obtener el diagnóstico del Asesor cuántico.");
-        setAiLoading(false);
+        throw new Error(data.error || "No success in response");
       }
     } catch (e) {
-      console.error(e);
+      console.warn("[CLIENT/AI] Backend AI diagnostics failed, falling back to local simulation:", e);
       clearInterval(interval);
-      alert("Error de conexión con el núcleo cuántico de IA.");
-      setAiLoading(false);
+      
+      // Fallback local instantáneo y robusto
+      try {
+        const localData = clientSideAiExplain(domain.domainName, activeTab, recordsPayload);
+        setAiLoadingStep(5);
+        setTimeout(() => {
+          setAiAnalysis(localData.analysis);
+          setAiLoading(false);
+        }, 500);
+      } catch (localErr) {
+        console.error("[CLIENT/AI] Critical failure in local AI diagnostic generation:", localErr);
+        alert("Error de conexión con el núcleo cuántico de IA.");
+        setAiLoading(false);
+      }
     }
   };
 
@@ -191,6 +208,9 @@ export default function DomainManager({
     setVerifyLoading(true);
     setCheckingRecords({ mx: true, spf: true, dkim: true, dmarc: true });
 
+    let data: any = {};
+    let fallbackUsed = false;
+
     try {
       const response = await fetch('/api/dns/verify', {
         method: 'POST',
@@ -198,66 +218,76 @@ export default function DomainManager({
         body: JSON.stringify({ domainName: domain.domainName })
       });
 
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}`);
+      }
+
       const responseText = await response.text();
-      let data: any = {};
-      let parseError = false;
       try {
         data = JSON.parse(responseText);
       } catch (e) {
-        parseError = true;
+        throw new Error("Invalid JSON response");
       }
 
-      if (response.ok && !parseError && data.success) {
-        const verifiedMX = data.mx?.status === 'verified';
-        const verifiedSPF = data.spf?.status === 'verified';
-        const verifiedDKIM = data.dkim?.status === 'verified';
-        const verifiedDMARC = data.dmarc?.status === 'verified';
-
-        // Stagger/simular que termina de verificar cada uno con un elegante retraso
-        setTimeout(() => {
-          setCheckingRecords(prev => ({ ...prev, mx: false }));
-        }, 300);
-
-        setTimeout(() => {
-          setCheckingRecords(prev => ({ ...prev, spf: false }));
-        }, 600);
-
-        setTimeout(() => {
-          setCheckingRecords(prev => ({ ...prev, dkim: false }));
-        }, 900);
-
-        setTimeout(async () => {
-          setCheckingRecords(prev => ({ ...prev, dmarc: false }));
-
-          const updatedDomain: Domain = {
-            ...domain,
-            mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue },
-            spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
-            dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
-            dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
-            verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
-          };
-
-          await onUpdateDomain(updatedDomain);
-
-          if (updatedDomain.verified) {
-            alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
-          } else {
-            alert("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.");
-          }
-        }, 1200);
-
-      } else {
-        alert(data.error || "Ocurrió un error al verificar las DNS.");
-        setCheckingRecords({ mx: false, spf: false, dkim: false, dmarc: false });
+      if (!data.success) {
+        throw new Error(data.error || "Verification success was false");
       }
     } catch (e) {
-      console.error(e);
-      alert("Error de conexión durante la comprobación de DNS.");
-      setCheckingRecords({ mx: false, spf: false, dkim: false, dmarc: false });
-    } finally {
-      setVerifyLoading(false);
+      console.warn("[CLIENT/DNS] Backend verify failed, falling back to client-side DNS-over-HTTPS:", e);
+      fallbackUsed = true;
+      try {
+        data = await clientSideVerifyDns(domain.domainName);
+      } catch (clientErr: any) {
+        console.error("[CLIENT/DNS] Client-side DNS fallback failed:", clientErr);
+        data = { success: false, error: clientErr.message };
+      }
     }
+
+    if (data.success) {
+      const verifiedMX = data.mx?.status === 'verified';
+      const verifiedSPF = data.spf?.status === 'verified';
+      const verifiedDKIM = data.dkim?.status === 'verified';
+      const verifiedDMARC = data.dmarc?.status === 'verified';
+
+      // Stagger/simular que termina de verificar cada uno con un elegante retraso
+      setTimeout(() => {
+        setCheckingRecords(prev => ({ ...prev, mx: false }));
+      }, 300);
+
+      setTimeout(() => {
+        setCheckingRecords(prev => ({ ...prev, spf: false }));
+      }, 600);
+
+      setTimeout(() => {
+        setCheckingRecords(prev => ({ ...prev, dkim: false }));
+      }, 900);
+
+      setTimeout(async () => {
+        setCheckingRecords(prev => ({ ...prev, dmarc: false }));
+
+        const updatedDomain: Domain = {
+          ...domain,
+          mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue },
+          spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
+          dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
+          dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
+          verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
+        };
+
+        await onUpdateDomain(updatedDomain);
+
+        if (updatedDomain.verified) {
+          alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
+        } else {
+          alert("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.");
+        }
+      }, 1200);
+
+    } else {
+      alert(data.error || "Ocurrió un error al verificar las DNS.");
+      setCheckingRecords({ mx: false, spf: false, dkim: false, dmarc: false });
+    }
+    setVerifyLoading(false);
   };
 
   const handleVerifySingle = async (key: 'mx' | 'spf' | 'dkim' | 'dmarc') => {
@@ -270,6 +300,7 @@ export default function DomainManager({
 
     setCheckingRecords(prev => ({ ...prev, [key]: true }));
 
+    let data: any = {};
     try {
       const response = await fetch('/api/dns/verify', {
         method: 'POST',
@@ -277,48 +308,58 @@ export default function DomainManager({
         body: JSON.stringify({ domainName: domain.domainName })
       });
 
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}`);
+      }
+
       const responseText = await response.text();
-      let data: any = {};
-      let parseError = false;
       try {
         data = JSON.parse(responseText);
       } catch (e) {
-        parseError = true;
+        throw new Error("Invalid JSON response");
       }
 
-      if (response.ok && !parseError && data.success) {
-        const recordData = data[key];
-        if (recordData) {
-          const isVerified = recordData.status === 'verified';
-          const recKey = `${key}Record` as 'mxRecord' | 'spfRecord' | 'dkimRecord' | 'dmarcRecord';
-          
-          const updatedRecord = {
-            ...domain[recKey],
-            status: isVerified ? 'verified' as const : 'failed' as const,
-            currentValue: recordData.currentValue
-          };
-
-          const updatedDomain: Domain = {
-            ...domain,
-            [recKey]: updatedRecord
-          };
-
-          // Recalcular estado de verificación global (MX y SPF)
-          const isMxVerified = key === 'mx' ? isVerified : (domain.mxRecord.status === 'verified');
-          const isSpfVerified = key === 'spf' ? isVerified : (domain.spfRecord.status === 'verified');
-          updatedDomain.verified = isMxVerified && isSpfVerified;
-
-          await onUpdateDomain(updatedDomain);
-        }
-      } else {
-        alert(data.error || `Error al verificar el registro ${key.toUpperCase()}.`);
+      if (!data.success) {
+        throw new Error(data.error || "Verification success was false");
       }
     } catch (e) {
-      console.error(e);
-      alert("Error de conexión durante la comprobación de DNS.");
-    } finally {
-      setCheckingRecords(prev => ({ ...prev, [key]: false }));
+      console.warn(`[CLIENT/DNS] Single verify for ${key} failed, falling back to browser DNS-over-HTTPS:`, e);
+      try {
+        data = await clientSideVerifyDns(domain.domainName);
+      } catch (clientErr: any) {
+        console.error("[CLIENT/DNS] Single client-side DNS fallback failed:", clientErr);
+        data = { success: false, error: clientErr.message };
+      }
     }
+
+    if (data.success) {
+      const recordData = data[key];
+      if (recordData) {
+        const isVerified = recordData.status === 'verified';
+        const recKey = `${key}Record` as 'mxRecord' | 'spfRecord' | 'dkimRecord' | 'dmarcRecord';
+        
+        const updatedRecord = {
+          ...domain[recKey],
+          status: isVerified ? 'verified' as const : 'failed' as const,
+          currentValue: recordData.currentValue
+        };
+
+        const updatedDomain: Domain = {
+          ...domain,
+          [recKey]: updatedRecord
+        };
+
+        // Recalcular estado de verificación global (MX y SPF)
+        const isMxVerified = key === 'mx' ? isVerified : (domain.mxRecord.status === 'verified');
+        const isSpfVerified = key === 'spf' ? isVerified : (domain.spfRecord.status === 'verified');
+        updatedDomain.verified = isMxVerified && isSpfVerified;
+
+        await onUpdateDomain(updatedDomain);
+      }
+    } else {
+      alert(data.error || `Error al verificar el registro ${key.toUpperCase()}.`);
+    }
+    setCheckingRecords(prev => ({ ...prev, [key]: false }));
   };
 
   const renderStatusBadge = (status: DNSRecord['status'], isChecking: boolean) => {
