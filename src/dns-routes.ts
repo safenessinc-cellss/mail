@@ -1,4 +1,5 @@
 import express, { Request, Response, Router, NextFunction } from "express";
+import dns from "dns";
 import { GoogleGenAI } from "@google/genai";
 
 const router: Router = express.Router();
@@ -32,27 +33,9 @@ function getGeminiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-// Configuración de Hostinger esperada para comparar
-const EXPECTED_MX = "10 mx1.hostinger.com y 10 mx2.hostinger.com";
-const EXPECTED_SPF = "v=spf1 include:spf.hostinger.com ~all";
-
-// Función con timeout genérico para asegurar que no nos bloqueemos en serverless
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, defaultValue: T): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
-  const timeoutPromise = new Promise<T>((resolve) => {
-    timeoutId = setTimeout(() => {
-      console.warn(`[TIMEOUT] DNS operation timed out after ${timeoutMs}ms.`);
-      resolve(defaultValue);
-    }, timeoutMs);
-  });
-  return Promise.race([
-    promise.then((res) => {
-      clearTimeout(timeoutId);
-      return res;
-    }),
-    timeoutPromise
-  ]);
-}
+// Configuración de ImprovMX esperada para comparar
+const EXPECTED_MX = "10 mx1.improvmx.com y 20 mx2.improvmx.com";
+const EXPECTED_SPF = "v=spf1 include:spf.improvmx.com ~all";
 
 // Función auxiliar para consultar DNS sobre HTTPS (DoH) como fallback ultra-estable
 async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
@@ -65,7 +48,7 @@ async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
   for (const url of providers) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 segundos máx por proveedor
+      const timeoutId = setTimeout(() => controller.abort(), 4500);
 
       const response = await fetch(url, {
         headers: { "accept": "application/dns-json" },
@@ -101,13 +84,21 @@ async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
   return [];
 }
 
-// Resolver MX robusto codificado puramente sobre HTTPS (DoH) para máxima compatibilidad con contenedores y serverless
+// Resolver MX robusto (Primero nativo, luego fallback DoH)
 async function resolveMxSecurely(domain: string): Promise<{ priority: number; exchange: string }[]> {
-  console.log(`[DEBUG/DNS-MX] Iniciando resolución MX vía DoH para: ${domain}`);
   try {
-    const answers = await withTimeout(resolveDnsViaDoH(domain, "MX"), 2500, []);
-    if (answers && answers.length > 0) {
-      const records = answers.map(ans => {
+    console.log(`[DEBUG/DNS-MX] Buscando MX de forma nativa para: ${domain}`);
+    return await new Promise((resolve, reject) => {
+      dns.resolveMx(domain, (err, records) => {
+        if (err) return reject(err);
+        resolve(records || []);
+      });
+    });
+  } catch (err: any) {
+    console.warn(`[DEBUG/DNS-MX] Consulta MX nativa falló para ${domain}, usando fallback DoH. Error:`, err.message);
+    try {
+      const answers = await resolveDnsViaDoH(domain, "MX");
+      return answers.map(ans => {
         const parts = ans.trim().split(/\s+/);
         if (parts.length >= 2) {
           return {
@@ -118,29 +109,33 @@ async function resolveMxSecurely(domain: string): Promise<{ priority: number; ex
           return { priority: 10, exchange: ans.replace(/\.$/, "") };
         }
       });
-      console.log(`[DEBUG/DNS-MX] Resuelto MX vía DoH con éxito:`, records);
-      return records;
+    } catch (dohErr: any) {
+      console.error(`[DEBUG/DNS-MX] Fallback DoH MX falló para ${domain}:`, dohErr.message);
+      throw err; // Lanzar error original
     }
-  } catch (err: any) {
-    console.warn(`[DEBUG/DNS-MX] Error en resolución DoH de MX:`, err.message);
   }
-  return [];
 }
 
-// Resolver TXT robusto codificado puramente sobre HTTPS (DoH) para máxima compatibilidad con contenedores y serverless
+// Resolver TXT robusto (Primero nativo, luego fallback DoH)
 async function resolveTxtSecurely(domain: string): Promise<string[][]> {
-  console.log(`[DEBUG/DNS-TXT] Iniciando resolución TXT vía DoH para: ${domain}`);
   try {
-    const answers = await withTimeout(resolveDnsViaDoH(domain, "TXT"), 2500, []);
-    if (answers && answers.length > 0) {
-      const records = answers.map(ans => [ans]);
-      console.log(`[DEBUG/DNS-TXT] Resuelto TXT vía DoH con éxito para ${domain}`);
-      return records;
-    }
+    console.log(`[DEBUG/DNS-TXT] Buscando TXT de forma nativa para: ${domain}`);
+    return await new Promise((resolve, reject) => {
+      dns.resolveTxt(domain, (err, records) => {
+        if (err) return reject(err);
+        resolve(records || []);
+      });
+    });
   } catch (err: any) {
-    console.warn(`[DEBUG/DNS-TXT] Error en resolución DoH de TXT:`, err.message);
+    console.warn(`[DEBUG/DNS-TXT] Consulta TXT nativa falló para ${domain}, usando fallback DoH. Error:`, err.message);
+    try {
+      const answers = await resolveDnsViaDoH(domain, "TXT");
+      return answers.map(ans => [ans]);
+    } catch (dohErr: any) {
+      console.error(`[DEBUG/DNS-TXT] Fallback DoH TXT falló para ${domain}:`, dohErr.message);
+      throw err;
+    }
   }
-  return [];
 }
 
 // POST /api/dns/verify
@@ -165,33 +160,16 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     const domain = domainParam.trim().toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, "");
     console.log(`[DEBUG/DNS] Procesando verificación para el dominio limpio: ${domain}`);
 
-    // Resoluciones en paralelo para asegurar respuesta ultra-rápida y evitar límites de timeout de ejecución en serverless (como Vercel)
-    const [mxRecords, spfTxtRecords, dkimTxtRecords, dmarcTxtRecords] = await Promise.all([
-      resolveMxSecurely(domain).catch(err => {
-        console.warn("[DEBUG/DNS-API] Error MX atrapado de forma paralela:", err.message);
-        return [];
-      }),
-      resolveTxtSecurely(domain).catch(err => {
-        console.warn("[DEBUG/DNS-API] Error SPF atrapado de forma paralela:", err.message);
-        return [];
-      }),
-      resolveTxtSecurely(`default._domainkey.${domain}`).catch(err => {
-        console.warn("[DEBUG/DNS-API] Error DKIM atrapado de forma paralela:", err.message);
-        return [];
-      }),
-      resolveTxtSecurely(`_dmarc.${domain}`).catch(err => {
-        console.warn("[DEBUG/DNS-API] Error DMARC atrapado de forma paralela:", err.message);
-        return [];
-      })
-    ]);
-
     // 1. Verificación MX
     let mxStatus = "failed";
     let mxCurrentValue = "";
     try {
-      if (mxRecords && mxRecords.length > 0) {
-        mxCurrentValue = mxRecords.map(r => `${r.priority} ${r.exchange}`).join(", ");
-        const configured = mxRecords.some(r => r && r.exchange && typeof r.exchange === "string" && (
+      const records = await resolveMxSecurely(domain);
+      if (records && records.length > 0) {
+        mxCurrentValue = records.map(r => `${r.priority} ${r.exchange}`).join(", ");
+        const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && (
+          r.exchange.toLowerCase().includes("improvmx.com") || 
+          r.exchange.toLowerCase().includes("resend.com") ||
           r.exchange.toLowerCase().includes("hostinger.com") || 
           r.exchange.toLowerCase().includes("hostinger.es") || 
           r.exchange.toLowerCase().includes("hostinger.mx")
@@ -208,11 +186,12 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     let spfStatus = "failed";
     let spfCurrentValue = "";
     try {
-      const flattened = spfTxtRecords ? spfTxtRecords.flat() : [];
+      const txtRecords = await resolveTxtSecurely(domain);
+      const flattened = txtRecords.flat();
       const spfText = flattened.find(record => record && typeof record === "string" && record.startsWith("v=spf1"));
       if (spfText) {
         spfCurrentValue = spfText;
-        const configured = spfText.includes("include:spf.hostinger.com") || spfText.includes("spf.hostinger");
+        const configured = spfText.includes("include:spf.improvmx.com") || spfText.includes("spf.improvmx") || spfText.includes("include:spf.resend.com") || spfText.includes("spf.resend") || spfText.includes("spf.hostinger");
         spfStatus = configured ? "verified" : "failed";
       } else {
         spfCurrentValue = flattened.length > 0 ? "TXT records found, but no SPF starting with v=spf1" : "No TXT records found";
@@ -225,7 +204,9 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     let dkimStatus = "failed";
     let dkimCurrentValue = "";
     try {
-      const flattened = dkimTxtRecords ? dkimTxtRecords.flat() : [];
+      const dkimDomain = `default._domainkey.${domain}`;
+      const txtRecords = await resolveTxtSecurely(dkimDomain);
+      const flattened = txtRecords.flat();
       const dkimText = flattened.find(record => record && typeof record === "string" && (record.startsWith("v=DKIM1") || record.includes("k=rsa")));
       if (dkimText) {
         dkimCurrentValue = dkimText;
@@ -241,7 +222,9 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     let dmarcStatus = "failed";
     let dmarcCurrentValue = "";
     try {
-      const flattened = dmarcTxtRecords ? dmarcTxtRecords.flat() : [];
+      const dmarcDomain = `_dmarc.${domain}`;
+      const txtRecords = await resolveTxtSecurely(dmarcDomain);
+      const flattened = txtRecords.flat();
       const dmarcText = flattened.find(record => record && typeof record === "string" && (record.startsWith("v=DMARC1") || record.includes("p=")));
       if (dmarcText) {
         dmarcCurrentValue = dmarcText;
@@ -256,7 +239,7 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     const allVerified = mxStatus === "verified" && spfStatus === "verified";
 
     // Formatear payload exactamente como lo esperan los llamantes
-    const mxObj = { status: mxStatus, currentValue: mxCurrentValue, expected: EXPECTED_MX, host: "@", destination: "mx1.hostinger.com" };
+    const mxObj = { status: mxStatus, currentValue: mxCurrentValue, expected: EXPECTED_MX, host: "@", destination: "mx1.improvmx.com" };
     const spfObj = { status: spfStatus, currentValue: spfCurrentValue, expected: EXPECTED_SPF, host: "@", destination: EXPECTED_SPF };
     const dkimObj = { status: dkimStatus, currentValue: dkimCurrentValue, expected: `v=DKIM1; k=rsa; p=... (Selector: default)`, host: "default._domainkey", destination: "Firma DKIM en Hostinger" };
     const dmarcObj = { status: dmarcStatus, currentValue: dmarcCurrentValue, expected: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`, host: "_dmarc", destination: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}` };
@@ -265,10 +248,12 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
       success: true,
       domain,
       domainName: domain,
+      // Estructura PLANA (Requerida por App.tsx en frontend)
       mx: mxObj,
       spf: spfObj,
       dkim: dkimObj,
       dmarc: dmarcObj,
+      // Estructura ANIDADA (Para compatibilidad secundaria)
       results: {
         mx: mxObj,
         spf: spfObj,
@@ -285,6 +270,7 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
 
   } catch (error: any) {
     console.error("[DEBUG/DNS] Error crítico en /verify:", error);
+    // Devolvemos SIEMPRE un JSON incluso si hay errores
     const errorPayload = {
       success: false,
       error: "Error interno al verificar los registros DNS",
@@ -345,7 +331,7 @@ router.post("/ai-explain", async (req: Request, res: Response, next: NextFunctio
         recordType: "MX",
         status: mxVal.verified ? "OK" : "ERROR",
         currentValue: mxVal.current || "No detectado",
-        expectedValue: mxVal.expected || "10 mx1.hostinger.com y 10 mx2.hostinger.com",
+        expectedValue: mxVal.expected || "10 mx1.improvmx.com y 20 mx2.improvmx.com",
         criticality: "ALTA",
         analysis: mxVal.verified 
           ? "El enrutador cuántico MX está perfectamente apuntado y listo para descodificar emails entrantes." 
@@ -355,15 +341,15 @@ router.post("/ai-explain", async (req: Request, res: Response, next: NextFunctio
           : [
               `Accede a la zona DNS avanzada de tu proveedor (${provider || "tu proveedor"}).`,
               "Elimina registros MX antiguos o redundantes para evitar colisiones de rutas.",
-              "Añade un registro MX: Host/Nombre '@', Prioridad '10', Apunta a 'mx1.hostinger.com' (TTL 14400 o auto).",
-              "Añade un segundo registro MX: Host/Nombre '@', Prioridad '10', Apunta a 'mx2.hostinger.com'."
+              "Añade un registro MX: Host/Nombre '@', Prioridad '10', Apunta a 'mx1.improvmx.com' (TTL 14400 o auto).",
+              "Añade un segundo registro MX: Host/Nombre '@', Prioridad '20', Apunta a 'mx2.improvmx.com'."
             ]
       },
       {
         recordType: "SPF",
         status: spfVal.verified ? "OK" : "ERROR",
         currentValue: spfVal.current || "No detectado",
-        expectedValue: spfVal.expected || "v=spf1 include:spf.hostinger.com ~all",
+        expectedValue: spfVal.expected || "v=spf1 include:spf.improvmx.com ~all",
         criticality: "MEDIA",
         analysis: spfVal.verified 
           ? "La directiva SPF de remitente de confianza está activa y protegiendo tu reputación de salida." 
@@ -372,7 +358,7 @@ router.post("/ai-explain", async (req: Request, res: Response, next: NextFunctio
           "Navega al gestor DNS de tu dominio.",
           "Crea un nuevo registro de tipo TXT.",
           "Host/Nombre: '@' (o déjalo en blanco según el proveedor).",
-          "Copia este valor exacto sin comillas redundantes: v=spf1 include:spf.hostinger.com ~all",
+          "Copia este valor exacto sin comillas redundantes: v=spf1 include:spf.improvmx.com ~all",
           "Guarda los cambios."
         ]
       },
@@ -415,8 +401,8 @@ router.post("/ai-explain", async (req: Request, res: Response, next: NextFunctio
     let providerNote = "Asegúrate de esperar de 10 a 30 minutos para que los registradores DNS propaguen estas nuevas constantes cuánticas.";
     if (providerStr.includes("cloudflare")) {
       providerNote = "[SOPORTE CLOUDFLARE] ¡Atención cuántica! Asegúrate de que las nubes de Cloudflare para los registros MX y TXT estén desactivadas (Proxy: Solo DNS / Nube Gris). Si el proxy naranja está activo, el flujo de correo SMTP se interrumpirá.";
-    } else if (providerStr.includes("hostinger")) {
-      providerNote = "[SOPORTE HOSTINGER] Dado que estás usando Hostinger como registrador local, puedes presionar el botón de auto-configuración de Hostinger para inyectar estos registros con un solo clic.";
+    } else if (providerStr.includes("improvmx") || providerStr.includes("resend")) {
+      providerNote = "[SOPORTE REDIRECCIÓN] ImprovMX gestiona de forma automática los correos de entrada. Configura Resend en los DNS si necesitas habilitar el envío (SMTP) premium para tu dominio.";
     }
 
     return {
@@ -444,7 +430,7 @@ router.post("/ai-explain", async (req: Request, res: Response, next: NextFunctio
       return res.json(responseBody);
     }
 
-    const prompt = `Analiza detenidamente la configuración de registros DNS corporativos para la plataforma de correo "FreeMail Hub" bajo el dominio "${cleanDomain}".
+    const prompt = `Analiza detenidamente la configuración de registros DNS corporativos para la plataforma de correo "FreeMail Hub" (que utiliza ImprovMX para recibir y Resend para enviar) bajo el dominio "${cleanDomain}".
 Proveedor de DNS ingresado por el usuario: ${provider || "Cloudflare / GoDaddy / General"}
 
 Registros de estado actuales que se detectaron en los DNS:
@@ -470,11 +456,11 @@ Tu objetivo consiste en devolver un diagnóstico completo, optimista, sumamente 
               items: {
                 type: "OBJECT",
                 properties: {
-                  recordType: { type: "STRING" },
-                  status: { type: "STRING" },
+                  recordType: { type: "STRING" }, // "MX", "SPF", "DKIM", "DMARC"
+                  status: { type: "STRING" }, // "OK", "ERROR", "PENDING"
                   currentValue: { type: "STRING" },
                   expectedValue: { type: "STRING" },
-                  criticality: { type: "STRING" },
+                  criticality: { type: "STRING" }, // "ALTA", "MEDIA", "INFORMATIVA"
                   analysis: { type: "STRING", description: "Explicación breve del error o estado actual en español." },
                   actionSteps: {
                     type: "ARRAY",
@@ -510,6 +496,7 @@ Tu objetivo consiste en devolver un diagnóstico completo, optimista, sumamente 
 
   } catch (error: any) {
     console.error("[DEBUG/DNS] Falla en consulta real de IA o parseo. Entrando en modo Diagnóstico Resiliente de IA de Respaldo:", error);
+    // En caso de cuotas agotadas, fallas de API, o modelo temporalmente no disponible, devolvemos el fallback de alta fidelidad
     const responseBody = {
       success: true,
       analysis: generateFallbackResponse()
