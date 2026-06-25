@@ -19,10 +19,12 @@ import {
   ExternalLink,
   Info,
   RefreshCw,
-  Send
+  Bot,
+  Cpu,
+  Zap,
+  Award
 } from 'lucide-react';
 import DNSManualConfigurator from './DNSManualConfigurator';
-import DnsSetupWizard from './DnsSetupWizard';
 
 interface DomainManagerProps {
   domain: Domain | null;
@@ -48,127 +50,107 @@ export default function DomainManager({
   const [newDomainName, setNewDomainName] = useState('');
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'cloudflare' | 'godaddy' | 'namecheap'>('cloudflare');
+  const [checkingRecords, setCheckingRecords] = useState<Record<string, boolean>>({
+    mx: false,
+    spf: false,
+    dkim: false,
+    dmarc: false,
+  });
 
-  // Estados para el corrector y diagnosticador de IA
-  const [aiStatus, setAiStatus] = useState<'idle' | 'analyzing' | 'done_diagnostics' | 'correcting' | 'completed'>('idle');
-  const [aiLogs, setAiLogs] = useState<string[]>([]);
-  const [aiDiagnosis, setAiDiagnosis] = useState<{
-    score: number;
-    text: string;
-    details: string;
-    steps: string[];
-    isVercelBlockDetected: boolean;
-  } | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiLoadingStep, setAiLoadingStep] = useState(0);
+  const [aiAnalysis, setAiAnalysis] = useState<any>(null);
 
-  const runAIDiagnostics = async () => {
+  const handleAIEngage = async () => {
     if (!domain) return;
-    setAiStatus('analyzing');
-    setAiLogs([
-      '[SISTEMA IA] Inicializando escaneo cuántico de topología de red...',
-      `[SISTEMA IA] Comprobando dominio principal: ${domain.domainName}`,
-      '[SISTEMA IA] Probando puertos SMTP (TCP 587/465) y resoluciones UDP de salida...'
-    ]);
-    
-    await new Promise(resolve => setTimeout(resolve, 800));
-    setAiLogs(prev => [
-      ...prev,
-      '[SISTEMA IA] Analizando enlace HTTPS DNS-over-HTTPS (DoH) mediante Cloudflare...',
-      '[SISTEMA IA] Detectado bloqueo intermitente de socket SMTP TCP saliente de Vercel (FUNCTION_INVOCATION_FAILED)...',
-      '[SISTEMA IA] Analizando si "Mitigación SMTP por IA Map" está activado.'
-    ]);
+    setAiLoading(true);
+    setAiLoadingStep(0);
+    setAiAnalysis(null);
 
-    await new Promise(resolve => setTimeout(resolve, 900));
-    
-    const isVerifiedAlready = domain.verified;
-    const isSmtpBypassed = domain.smtpBypassEnabled === true;
-    const score = isVerifiedAlready ? (isSmtpBypassed ? 100 : 80) : 35;
-    
-    setAiLogs(prev => [
-      ...prev,
-      '[SISTEMA IA] ¡Análisis de red completado!',
-      isVerifiedAlready 
-        ? '[SISTEMA IA] El enrutamiento DNS MX/TXT reporta activo.' 
-        : '[SISTEMA IA] ALERTA: DNS DNS error report/Vercel UDP timeout detectado.',
-      isSmtpBypassed
-        ? '✓ [SISTEMA IA] Bypass SMTP por IA de FreeMail Hub está ACTIVO y protegiendo tus envíos.'
-        : '⚠️ [SISTEMA IA] ALERTA: Tráfico SMTP desprotegido. Entornos Serverless de Vercel bloquearán tus envíos reales con "FUNCTION_INVOCATION_FAILED".'
-    ]);
-
-    setAiDiagnosis({
-      score,
-      text: isVerifiedAlready
-        ? (isSmtpBypassed ? 'Dominio blindado al 100% por IA con enrutamiento seguro.' : 'DNS verificado, pero el puerto SMTP está expuesto a bloqueos de red de Vercel.')
-        : 'Invocación bloqueada por restricciones del entorno Serverless (FUNCTION_INVOCATION_FAILED / SMTP Port Block).',
-      details: isVerifiedAlready
-        ? (isSmtpBypassed 
-            ? 'Todos los registros y pasarelas de correo SMTP han sido desviados por el Enrutador Virtual de IA de FreeMail Hub. Tus correos saldrán sin problemas en cualquier servidor web/serverless.'
-            : 'Los registros DNS están correctos. Sin embargo, debido a que este applet corre en Vercel Serverless, los sockets TCP de nodemailer se congelan tirando "FUNCTION_INVOCATION_FAILED". Se requiere enrutado protector de IA.')
-        : 'Vercel Serverless / Cloud Run restringen con frecuencia sockets UDP nativos para consultas DNS y puertos TCP para SMTP estándar (25, 465, 587). Aunque tus registros estén cargados en Hostinger/Cloudflare, el entono de red bloquea los sockets.',
-      steps: isVerifiedAlready
-        ? (isSmtpBypassed
-            ? ['No se requieren más correcciones. Tu correo electrónico e IA Bypass están operativos.']
-            : ['Activar el enrutamiento y bypass de SMTP por IA para evitar caídas aleatorias al mandar correos.'])
-        : [
-            'Efectuar Autocorrección con IA para forzar la inyección DNS activa y simultáneamente encender el Bypass SMTP Seguro.',
-            'Esperar la propagación de TTL de tu registrador.',
-            'Asegurar enrutado virtual para evitar bloqueos de firewalls de Vercel.'
-          ],
-      isVercelBlockDetected: !isVerifiedAlready || !isSmtpBypassed
-    });
-    setAiStatus('done_diagnostics');
-  };
-
-  const executeAICorrect = async () => {
-    if (!domain) return;
-    setAiStatus('correcting');
-    setAiLogs(prev => [
-      ...prev,
-      '[CORRECTOR IA] Activando protocolo de mitigación autónoma de DNS y SMTP...',
-      '[CORRECTOR IA] Inyectando configuraciones seguras en el canal de datos...'
-    ]);
-
-    await new Promise(resolve => setTimeout(resolve, 600));
-    setAiLogs(prev => [
-      ...prev,
-      '✓ [CORRECTOR IA] Configurando enrutadores MX de Hostinger (prioridad 10/10).',
-      '✓ [CORRECTOR IA] Integrando firma unificada SPF TXT (v=spf1 include:spf.hostinger.com ~all).',
-      '[CORRECTOR IA] Calculando y firmando llaves de autenticación DKIM...'
-    ]);
-
-    await new Promise(resolve => setTimeout(resolve, 750));
-    setAiLogs(prev => [
-      ...prev,
-      '✓ [CORRECTOR IA] Registro DKIM firmado para default._domainkey con llave RSA.',
-      '✓ [CORRECTOR IA] Estableciendo política anti-phishing DMARC (p=none) sobre _dmarc.',
-      '✓ [CORRECTOR IA] Habilitando Enrutamiento Seguro SMTP de IA (Bypass de Bloqueos de Puerto TCP Vercel).',
-      '[CORRECTOR IA] Sincronizando políticas de resiliencia con Firestore...'
-    ]);
+    // Animación futurista del logger cuántico
+    const interval = setInterval(() => {
+      setAiLoadingStep((prev) => {
+        if (prev < 4) return prev + 1;
+        clearInterval(interval);
+        return prev;
+      });
+    }, 850);
 
     try {
-      const correctedDomain: Domain = {
-        ...domain,
-        mxRecord: { ...domain.mxRecord, status: 'verified', currentValue: '10 mx1.hostinger.com, 10 mx2.hostinger.com' },
-        spfRecord: { ...domain.spfRecord, status: 'verified', currentValue: 'v=spf1 include:spf.hostinger.com ~all' },
-        dkimRecord: { ...domain.dkimRecord, status: 'verified', currentValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0G9h...' },
-        dmarcRecord: { ...domain.dmarcRecord, status: 'verified', currentValue: `v=DMARC1; p=none; rua=mailto:dmarc@${domain.domainName}` },
-        verified: true,
-        smtpBypassEnabled: true
+      const recordsPayload = {
+        mx: {
+          verified: domain.mxRecord.status === 'verified',
+          current: domain.mxRecord.currentValue || 'No detectado',
+          expected: domain.mxRecord.expectedValue
+        },
+        spf: {
+          verified: domain.spfRecord.status === 'verified',
+          current: domain.spfRecord.currentValue || 'No detectado',
+          expected: domain.spfRecord.expectedValue
+        },
+        dkim: {
+          verified: domain.dkimRecord.status === 'verified',
+          current: domain.dkimRecord.currentValue || 'No detectado',
+          expected: domain.dkimRecord.expectedValue
+        },
+        dmarc: {
+          verified: domain.dmarcRecord.status === 'verified',
+          current: domain.dmarcRecord.currentValue || 'No detectado',
+          expected: domain.dmarcRecord.expectedValue
+        }
       };
+
+      const response = await fetch('/api/dns/ai-explain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domainName: domain.domainName,
+          provider: activeTab,
+          records: recordsPayload
+        })
+      });
+
+      const data = await response.json();
+      clearInterval(interval);
       
-      await onUpdateDomain(correctedDomain);
-      
-      await new Promise(resolve => setTimeout(resolve, 500));
-      setAiLogs(prev => [
-        ...prev,
-        '✓ [CORRECTOR IA] Registros DNS forzados y guardados en Firestore.',
-        '✓ [CORRECTOR IA] Flag smtpBypassEnabled activado en la base de datos.',
-        '★ [IA ACTIVA] ¡Reparación completada! El dominio ha sido enlazado de forma cuántica. Casillas de correo y SMTP Virtual listos.'
-      ]);
-      setAiStatus('completed');
-    } catch (err: any) {
-      setAiLogs(prev => [...prev, `[ERROR IA] Falló la inyección en Firestore: ${err.message}`]);
-      setAiStatus('done_diagnostics');
+      if (data.success) {
+        setAiLoadingStep(5);
+        setTimeout(() => {
+          setAiAnalysis(data.analysis);
+          setAiLoading(false);
+        }, 500);
+      } else {
+        alert(data.error || "No se pudo obtener el diagnóstico del Asesor cuántico.");
+        setAiLoading(false);
+      }
+    } catch (e) {
+      console.error(e);
+      clearInterval(interval);
+      alert("Error de conexión con el núcleo cuántico de IA.");
+      setAiLoading(false);
     }
+  };
+
+  const isValidDomain = (domainName: string): boolean => {
+    if (!domainName) return false;
+    // Expresión regular estándar para nombres de dominio de nivel superior válidos
+    const domainRegex = /^[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\.?$/;
+    
+    if (domainName.includes('/') || domainName.includes(' ') || domainName.includes('@')) {
+      return false;
+    }
+    
+    if (!domainRegex.test(domainName)) return false;
+    
+    // El TLD (ej. .com, .net) debe tener al menos 2 letras y de solo caracteres alfabéticos
+    const parts = domainName.split('.');
+    const tld = parts[parts.length - 1];
+    if (tld.length < 2 || !/^[a-zA-Z]+$/.test(tld)) {
+      return false;
+    }
+    
+    return true;
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -186,21 +168,171 @@ export default function DomainManager({
       alert("Por favor ingresa solo el nombre del dominio principal (ejemplo: midominio.com), sin rutas.");
       return;
     }
+    
+    // Validar sintaxis del dominio agregado
+    if (!isValidDomain(cleaned)) {
+      alert("Sintaxis de dominio inválida. Por favor ingresa un dominio correcto (ejemplo: midominio.com o sub.dominio.net), sin símbolos especiales ni espacios.");
+      return;
+    }
+    
     await onAddDomain(cleaned);
     setNewDomainName('');
   };
 
   const handleVerify = async () => {
+    if (!domain) return;
+
+    // Pre-validar sintaxis antes de intentar la llamada al backend para evitar errores 500
+    if (!isValidDomain(domain.domainName)) {
+      alert("Error: El dominio actual registrado posee un formato inválido de sintaxis. Por favor elimínelo y vuelva a crearlo correctamente.");
+      return;
+    }
+
     setVerifyLoading(true);
-    await onVerifyDomain();
-    setVerifyLoading(false);
+    setCheckingRecords({ mx: true, spf: true, dkim: true, dmarc: true });
+
+    try {
+      const response = await fetch('/api/dns/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domainName: domain.domainName })
+      });
+
+      const responseText = await response.text();
+      let data: any = {};
+      let parseError = false;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        parseError = true;
+      }
+
+      if (response.ok && !parseError && data.success) {
+        const verifiedMX = data.mx?.status === 'verified';
+        const verifiedSPF = data.spf?.status === 'verified';
+        const verifiedDKIM = data.dkim?.status === 'verified';
+        const verifiedDMARC = data.dmarc?.status === 'verified';
+
+        // Stagger/simular que termina de verificar cada uno con un elegante retraso
+        setTimeout(() => {
+          setCheckingRecords(prev => ({ ...prev, mx: false }));
+        }, 300);
+
+        setTimeout(() => {
+          setCheckingRecords(prev => ({ ...prev, spf: false }));
+        }, 600);
+
+        setTimeout(() => {
+          setCheckingRecords(prev => ({ ...prev, dkim: false }));
+        }, 900);
+
+        setTimeout(async () => {
+          setCheckingRecords(prev => ({ ...prev, dmarc: false }));
+
+          const updatedDomain: Domain = {
+            ...domain,
+            mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue },
+            spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
+            dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
+            dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
+            verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
+          };
+
+          await onUpdateDomain(updatedDomain);
+
+          if (updatedDomain.verified) {
+            alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
+          } else {
+            alert("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.");
+          }
+        }, 1200);
+
+      } else {
+        alert(data.error || "Ocurrió un error al verificar las DNS.");
+        setCheckingRecords({ mx: false, spf: false, dkim: false, dmarc: false });
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Error de conexión durante la comprobación de DNS.");
+      setCheckingRecords({ mx: false, spf: false, dkim: false, dmarc: false });
+    } finally {
+      setVerifyLoading(false);
+    }
   };
 
-  const renderStatusBadge = (status: DNSRecord['status']) => {
+  const handleVerifySingle = async (key: 'mx' | 'spf' | 'dkim' | 'dmarc') => {
+    if (!domain) return;
+
+    if (!isValidDomain(domain.domainName)) {
+      alert("Error: El dominio posee una sintaxis inválida.");
+      return;
+    }
+
+    setCheckingRecords(prev => ({ ...prev, [key]: true }));
+
+    try {
+      const response = await fetch('/api/dns/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domainName: domain.domainName })
+      });
+
+      const responseText = await response.text();
+      let data: any = {};
+      let parseError = false;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        parseError = true;
+      }
+
+      if (response.ok && !parseError && data.success) {
+        const recordData = data[key];
+        if (recordData) {
+          const isVerified = recordData.status === 'verified';
+          const recKey = `${key}Record` as 'mxRecord' | 'spfRecord' | 'dkimRecord' | 'dmarcRecord';
+          
+          const updatedRecord = {
+            ...domain[recKey],
+            status: isVerified ? 'verified' as const : 'failed' as const,
+            currentValue: recordData.currentValue
+          };
+
+          const updatedDomain: Domain = {
+            ...domain,
+            [recKey]: updatedRecord
+          };
+
+          // Recalcular estado de verificación global (MX y SPF)
+          const isMxVerified = key === 'mx' ? isVerified : (domain.mxRecord.status === 'verified');
+          const isSpfVerified = key === 'spf' ? isVerified : (domain.spfRecord.status === 'verified');
+          updatedDomain.verified = isMxVerified && isSpfVerified;
+
+          await onUpdateDomain(updatedDomain);
+        }
+      } else {
+        alert(data.error || `Error al verificar el registro ${key.toUpperCase()}.`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Error de conexión durante la comprobación de DNS.");
+    } finally {
+      setCheckingRecords(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const renderStatusBadge = (status: DNSRecord['status'], isChecking: boolean) => {
+    if (isChecking) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200">
+          <Loader2 className="h-3 w-3 mr-1 animate-spin text-blue-600 dark:text-blue-400" /> Verificando...
+        </span>
+      );
+    }
     if (status === 'verified') {
       return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-blue-50 text-blue-750 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-205">
-          <CheckCircle className="h-3 w-3 mr-1 text-blue-600" /> Verificado
+        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-50 text-emerald-705 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200">
+          <CheckCircle className="h-3 w-3 mr-1 text-emerald-600" /> Verificado
         </span>
       );
     }
@@ -301,7 +433,7 @@ export default function DomainManager({
                     <div className="space-y-2 flex-1 select-text">
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-bold text-slate-900 dark:text-white">{title}</span>
-                        {renderStatusBadge(rec.status)}
+                        {renderStatusBadge(rec.status, checkingRecords[id])}
                       </div>
                       <div className="grid grid-cols-4 gap-1 text-[11px] font-mono">
                         <span className="text-slate-400 font-light">Host:</span>
@@ -322,17 +454,34 @@ export default function DomainManager({
                         )}
                       </div>
                     </div>
-                    <button
-                      id={`btn-copy-${id}`}
-                      onClick={() => handleCopy(rec.expectedValue, id)}
-                      className="inline-flex self-start md:self-center items-center justify-center p-2.5 text-slate-500 hover:text-emerald-605 dark:text-slate-400 dark:hover:text-emerald-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium cursor-pointer transition shadow-xs"
-                    >
-                      {copiedText === id ? (
-                        <> <Check className="h-3.5 w-3.5 text-emerald-600" /> </>
-                      ) : (
-                        <> <Copy className="h-3.5 w-3.5" /> </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2 self-start md:self-center">
+                      <button
+                        id={`btn-verify-single-${id}`}
+                        onClick={() => handleVerifySingle(id as any)}
+                        disabled={checkingRecords[id]}
+                        className="inline-flex items-center justify-center p-2.5 text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium cursor-pointer transition shadow-xs disabled:opacity-50"
+                        title="Verificar registro individual"
+                      >
+                        {checkingRecords[id] ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5 font-bold" />
+                        )}
+                      </button>
+
+                      <button
+                        id={`btn-copy-${id}`}
+                        onClick={() => handleCopy(rec.expectedValue, id)}
+                        className="inline-flex items-center justify-center p-2.5 text-slate-500 hover:text-emerald-605 dark:text-slate-400 dark:hover:text-emerald-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium cursor-pointer transition shadow-xs"
+                        title="Copiar valor esperado"
+                      >
+                        {copiedText === id ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -371,210 +520,230 @@ export default function DomainManager({
                 </button>
               </div>
             </div>
-
-            {/* CANAL DE SALIDA SMTP E IA PROXY BYPASS */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm">
-              <div className="flex flex-col md:flex-row items-start gap-4">
-                <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-2xl shrink-0">
-                  <Send className="h-6 w-6" />
-                </div>
-                <div className="space-y-1 flex-1">
-                  <div className="flex items-center flex-wrap gap-2">
-                    <h3 className="text-sm font-bold text-slate-950 dark:text-white">
-                      Canal de Salida SMTP y Mitigador de Errores por IA
-                    </h3>
-                    {domain.smtpBypassEnabled ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold font-mono bg-emerald-50 text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-300 border border-emerald-250 uppercase tracking-wide">
-                        Bypass Activo
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold font-mono bg-amber-50 text-amber-800 dark:bg-amber-955/40 dark:text-amber-400 border border-amber-200 uppercase tracking-wide">
-                        Tráfico Expuesto (Vercel Limit)
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 font-light leading-relaxed">
-                    Vercel restringe sockets salientes SMTP en puertos estándar (465/587) generando el error <code className="font-mono text-rose-550 dark:text-rose-400 text-[10.5px]">FUNCTION_INVOCATION_FAILED</code>. Activando la mitigación por IA, FreeMail Hub enruta tus correos reales a través de enrutadores simulados de alta disponibilidad.
-                  </p>
-
-                  <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-slate-105 dark:border-slate-800/80 mt-4 select-text">
-                    <div className="space-y-0.5">
-                      <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 block">
-                        Modo de Enrutamiento SMTP
-                      </span>
-                      <span className="text-[11px] text-slate-450 dark:text-slate-400 font-light block">
-                        {domain.smtpBypassEnabled 
-                          ? "Activo: Tus correos se encaminan de forma protegida para evitar caídas de red de Vercel."
-                          : "Directo: Conexión TCP nativa (vulnerable a bloqueos en Vercel/Serverless)."}
-                      </span>
-                    </div>
-
-                    <button
-                      id="btn-toggle-smtp-bypass"
-                      onClick={async () => {
-                        const updated: Domain = {
-                          ...domain,
-                          smtpBypassEnabled: !domain.smtpBypassEnabled
-                        };
-                        await onUpdateDomain(updated);
-                      }}
-                      className={`inline-flex shrink-0 items-center justify-center px-4 py-2 rounded-xl text-xs font-bold border transition cursor-pointer select-none ${
-                        domain.smtpBypassEnabled
-                          ? "bg-slate-900 border-slate-900 text-white hover:bg-slate-850 dark:bg-emerald-600 dark:text-white dark:border-emerald-600 dark:hover:bg-emerald-505"
-                          : "bg-white border-slate-205 text-slate-700 hover:bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:text-slate-350 dark:hover:bg-slate-900"
-                      }`}
-                    >
-                      {domain.smtpBypassEnabled ? "Desactivar Bypass" : "Activar Bypass con IA"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* ASISTENTE CORRECTOR DNS IA */}
-            <div className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 shadow-xl relative overflow-hidden select-text">
-              <div className="absolute top-0 right-0 p-8 bg-emerald-500/10 blur-3xl rounded-full pointer-events-none"></div>
-              
-              <div className="flex items-start justify-between gap-4 relative z-10">
-                <div className="space-y-1">
-                  <h3 className="text-sm font-bold font-display text-white flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-emerald-400 animate-pulse" />
-                    Asistente de Autocorrección y Diagnóstico con IA
-                  </h3>
-                  <p className="text-[11px] text-slate-400 font-light">
-                    Agente autónomo integrado para mitigar fallas de consulta de red DNS e inconsistencias en redes Vercel/Serverless.
-                  </p>
-                </div>
-                <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono tracking-wider font-semibold bg-emerald-950 text-emerald-400 border border-emerald-900/50">
-                  IA ACTIVA
-                </span>
-              </div>
-
-              {/* Terminal Logs Window */}
-              {aiStatus !== 'idle' && (
-                <div className="mt-4 p-4 bg-slate-950 border border-slate-850 rounded-2xl font-mono text-[11px] leading-relaxed text-slate-300 overflow-hidden shadow-inner max-h-56 overflow-y-auto space-y-1 scrollbar-thin">
-                  <div className="text-slate-500 text-[10px] pb-1 border-b border-slate-900 flex justify-between">
-                    <span>CONSOLA COGNITIVA DNS DE IA</span>
-                    <span className="animate-pulse">● TRANSMITIENDO</span>
-                  </div>
-                  {aiLogs.map((log, index) => {
-                    let color = 'text-slate-350';
-                    if (log.startsWith('✓')) color = 'text-emerald-400 font-semibold';
-                    if (log.startsWith('★')) color = 'text-blue-405 font-bold';
-                    if (log.startsWith('[ERROR')) color = 'text-rose-450';
-                    return <div key={index} className={color}>{log}</div>;
-                  })}
-                  {aiStatus === 'analyzing' || aiStatus === 'correcting' ? (
-                    <div className="flex items-center space-x-1.5 text-emerald-405 text-[10px] animate-pulse">
-                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                      <span>Procesando correlación de datos...</span>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-
-              {/* Diagnosis Box */}
-              {aiStatus !== 'idle' && aiDiagnosis && (
-                <div className="mt-4 p-4 bg-slate-950/40 rounded-2xl border border-slate-800">
-                  <div className="flex items-start gap-3">
-                    <div className="h-10 w-10 shrink-0 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center font-mono font-bold text-lg text-emerald-400">
-                      {aiDiagnosis.score}%
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-slate-500 font-medium tracking-wide block uppercase">Diagnóstico Inicial de IA</span>
-                      <p className="text-xs font-semibold text-slate-100 leading-snug">{aiDiagnosis.text}</p>
-                      <p className="text-[11px] text-slate-400 font-light leading-relaxed pt-1 select-text">
-                        {aiDiagnosis.details}
-                      </p>
-                    </div>
-                  </div>
-
-                  {aiDiagnosis.steps && aiDiagnosis.steps.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-slate-850 space-y-2">
-                      <span className="text-[10px] text-slate-500 font-medium tracking-wide block uppercase">Pasos Correctivos Recomendados:</span>
-                      <ul className="list-disc pl-4 text-[11px] text-slate-350 space-y-1 font-light">
-                        {aiDiagnosis.steps.map((st, i) => <li key={i}>{st}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Action Operations inside AI component */}
-              <div className="mt-5 flex flex-wrap gap-2.5 relative z-10">
-                {aiStatus === 'idle' && (
-                  <button
-                    id="btn-ai-diagnose"
-                    onClick={runAIDiagnostics}
-                    className="inline-flex items-center justify-center px-4 py-2 bg-slate-800 hover:bg-slate-750 border border-slate-700/60 text-emerald-300 rounded-xl text-xs font-semibold transition cursor-pointer"
-                  >
-                    <Sparkles className="h-3.5 w-3.5 mr-1.5 shrink-0 text-emerald-400" />
-                    Iniciar Diagnóstico con IA
-                  </button>
-                )}
-
-                {(aiStatus === 'done_diagnostics' || aiStatus === 'correcting') && (
-                  <>
-                    {!domain.verified && (
-                      <button
-                        id="btn-ai-repair"
-                        onClick={executeAICorrect}
-                        disabled={aiStatus === 'correcting'}
-                        className="inline-flex items-center justify-center px-4 py-2 bg-emerald-600 hover:bg-emerald-505 disabled:bg-slate-700 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-emerald-950/60 cursor-pointer"
-                      >
-                        {aiStatus === 'correcting' ? (
-                          <> <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5 shrink-0" /> Aplicando Reparaciones... </>
-                        ) : (
-                          <> <Sparkles className="h-3.5 w-3.5 mr-1.5 shrink-0" /> Efectuar Autocorrección con IA (AI Bypass) </>
-                        )}
-                      </button>
-                    )}
-                    <button
-                      id="btn-ai-clear"
-                      onClick={() => {
-                        setAiStatus('idle');
-                        setAiLogs([]);
-                        setAiDiagnosis(null);
-                      }}
-                      className="inline-flex items-center justify-center px-3 py-2 bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-400 rounded-xl text-xs font-medium cursor-pointer transition"
-                    >
-                      Limpiar
-                    </button>
-                  </>
-                )}
-
-                {aiStatus === 'completed' && (
-                  <button
-                    id="btn-ai-close"
-                    onClick={() => {
-                      setAiStatus('idle');
-                      setAiLogs([]);
-                      setAiDiagnosis(null);
-                    }}
-                    className="inline-flex items-center justify-center px-4 py-2 bg-slate-850 hover:bg-slate-800 border border-slate-750 text-slate-100 rounded-xl text-xs font-semibold cursor-pointer transition"
-                  >
-                    Finalizar y Cerrar Asistente
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Step-by-Step interactive setup wizard */}
-            <DnsSetupWizard
-              domain={domain}
-              onUpdateDomain={onUpdateDomain}
-              onVerifyDomain={onVerifyDomain}
-              isDemoMode={isDemoMode}
-              loading={loading}
-            />
           </div>
 
-          {/* DNS Manual Configurator Integrations (Cloudflare, Google Workspace, CDN) */}
-          <DNSManualConfigurator
-            domain={domain}
-            onUpdateDomain={onUpdateDomain}
-            isDemoMode={isDemoMode}
-          />
+          {/* Right Sidebar - Widgets & Configurator */}
+          <div className="space-y-6 lg:col-span-1">
+            {/* Quantum AI Assistant Widget */}
+            <div className="bg-slate-900 border border-indigo-500/30 rounded-3xl p-6 text-white shadow-[0_0_25px_rgba(99,102,241,0.12)] relative overflow-hidden select-text">
+              {/* Cybernetic Accent Line */}
+              <div className="absolute top-0 left-0 right-0 h-[3px] bg-linear-to-r from-violet-500 via-indigo-400 to-blue-500" />
+              
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-indigo-500/10 rounded-xl border border-indigo-400/20 text-indigo-400">
+                    <Bot className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold font-display tracking-tight text-indigo-100 flex items-center gap-1.5">
+                      Asistente de IA Cuántico
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-550/20 border border-indigo-400/30 text-indigo-300 font-mono tracking-widest uppercase animate-pulse">
+                        SOPORTE
+                      </span>
+                    </h4>
+                    <p className="text-[10px] text-indigo-300/70 font-light font-mono">FreeMail Gemini Core</p>
+                  </div>
+                </div>
+                <Cpu className="h-4 w-4 text-indigo-400/50 animate-spin duration-3000" />
+              </div>
+
+              {!aiAnalysis && !aiLoading && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-300 leading-relaxed font-light">
+                    ¿Tienes fallas o estado pendiente en el dominio <strong className="text-indigo-200 font-mono">{domain.domainName}</strong>? 
+                    Gemini puede analizar el estado de tu proveedor <strong className="capitalize text-indigo-200">{activeTab}</strong> para diagnosticar y escribir una guía correctiva personalizada.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={handleAIEngage}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-linear-to-r from-violet-600 via-indigo-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 active:scale-[0.98] text-white text-xs font-semibold rounded-xl cursor-pointer transition shadow-[0_4px_12px_rgba(99,102,241,0.25)]"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-violet-200" />
+                    <span>Diagnosticar con Asesor de IA</span>
+                  </button>
+                </div>
+              )}
+
+              {aiLoading && (
+                <div className="space-y-4 py-2">
+                  <div className="flex flex-col items-center justify-center space-y-3 py-4">
+                    <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
+                    <span className="text-xs font-mono text-indigo-300 animate-pulse">ANALIZANDO CONFIGURACIÓN...</span>
+                  </div>
+                  
+                  <div className="space-y-1.5 font-mono text-[10px] bg-slate-950/60 p-3.5 rounded-2xl border border-indigo-500/10 text-slate-400 leading-relaxed">
+                    <div className={`flex items-center gap-1.5 ${aiLoadingStep >= 0 ? "text-indigo-300" : ""}`}>
+                      <span className="text-[8px] font-bold">●</span>
+                      <span>[0%] Conectando núcleo de análisis...</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${aiLoadingStep >= 1 ? "text-indigo-300" : ""}`}>
+                      <span className="text-[8px] font-bold">●</span>
+                      <span>[25%] Verificando directivas MX prioritarias...</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${aiLoadingStep >= 2 ? "text-indigo-300" : ""}`}>
+                      <span className="text-[8px] font-bold">●</span>
+                      <span>[50%] Analizando claves de confianza DKIM...</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${aiLoadingStep >= 3 ? "text-indigo-300" : ""}`}>
+                      <span className="text-[8px] font-bold">●</span>
+                      <span>[75%] Validando firmas SPF / DMARC...</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${aiLoadingStep >= 4 ? "text-indigo-300" : ""}`}>
+                      <span className="text-[8px] font-bold">●</span>
+                      <span>[100%] Compilando diagnóstico de Gemini...</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {aiAnalysis && !aiLoading && (
+                <div className="space-y-4">
+                  {/* Overall Score Banner */}
+                  <div className="flex items-center justify-between p-3.5 bg-slate-950/40 rounded-2xl border border-indigo-500/10 font-mono">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] text-indigo-400">Salud de DNS</span>
+                      <p className="text-[11px] text-slate-200 leading-tight font-sans font-light">{aiAnalysis.statusSummary}</p>
+                    </div>
+                    <div className="flex flex-col items-center justify-center py-1 px-3 bg-indigo-500/10 rounded-xl border border-indigo-400/20 text-indigo-300">
+                      <span className="text-lg font-bold leading-none">{aiAnalysis.overallScore}</span>
+                      <span className="text-[8px] mt-0.5">/100</span>
+                    </div>
+                  </div>
+
+                  {/* Diagnostics List */}
+                  <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1">
+                    {aiAnalysis.diagnostics?.map((diag: any, idx: number) => {
+                      const isVerified = diag.status === 'OK';
+                      return (
+                        <div key={idx} className="p-3 bg-slate-950/20 rounded-xl border border-indigo-950/50 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-mono font-bold text-indigo-300">
+                              {diag.recordType}
+                            </span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                              isVerified 
+                                ? "bg-emerald-500/10 border border-emerald-400/20 text-emerald-300"
+                                : diag.criticality === "ALTA"
+                                  ? "bg-rose-500/10 border border-rose-400/20 text-rose-300"
+                                  : "bg-amber-500/10 border border-amber-400/20 text-amber-300"
+                            }`}>
+                              {isVerified ? "Correcto" : diag.criticality === "ALTA" ? "Crítico" : "Advertencia"}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-slate-350 leading-relaxed font-light">
+                            {diag.analysis}
+                          </p>
+
+                          {diag.actionSteps && diag.actionSteps.length > 0 && (
+                            <div className="space-y-1 pt-1 border-t border-indigo-950/40">
+                              <span className="text-[9px] font-mono text-indigo-400/80">Pasos correctores para {activeTab}:</span>
+                              <ul className="list-disc list-inside space-y-1 text-[10px] text-slate-400 font-light leading-relaxed select-text">
+                                {diag.actionSteps.map((step: string, sIdx: number) => (
+                                  <li key={sIdx}>{step}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Provider Recommendation */}
+                  <div className="p-3 bg-slate-950/60 rounded-2xl border border-indigo-500/10 text-xs font-sans font-light leading-relaxed text-indigo-300 select-text">
+                    <span className="text-[10px] font-mono text-indigo-400 block mb-1">💡 Notas para {activeTab}</span>
+                    {aiAnalysis.providerNote}
+                  </div>
+
+                  {/* Refresh Analysis */}
+                  <div className="flex items-center gap-2 pt-1 font-mono">
+                    <button
+                      type="button"
+                      onClick={handleAIEngage}
+                      className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-400/20 text-indigo-200 text-xs rounded-xl cursor-pointer transition font-medium"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      <span>Re-analizar</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAiAnalysis(null)}
+                      className="px-3 py-2 bg-slate-950/40 hover:bg-slate-950/60 border border-slate-900 rounded-xl text-slate-450 hover:text-slate-200 text-xs transition cursor-pointer"
+                    >
+                      Ocultar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* DNS Manual Configurator Integrations (Cloudflare, Google Workspace, CDN) */}
+            <DNSManualConfigurator
+              domain={domain}
+              onUpdateDomain={onUpdateDomain}
+              isDemoMode={isDemoMode}
+            />
+
+            {/* Guide Steps to setup Domain DNS on registrars */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm">
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center space-x-1.5">
+                <HelpCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+                <span>¿Cómo añadir estos registros?</span>
+              </h4>
+
+              {/* Selector Tabs tabs */}
+              <div className="flex border-b border-slate-150 dark:border-slate-800 my-4 text-xs font-semibold">
+                {['cloudflare', 'godaddy', 'namecheap'].map((provider) => (
+                  <button
+                    key={provider}
+                    onClick={() => setActiveTab(provider as any)}
+                    className={`pb-2 px-3 border-b-2 capitalize transition cursor-pointer ${
+                      activeTab === provider
+                        ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-bold'
+                        : 'border-transparent text-slate-450'
+                    }`}
+                  >
+                    {provider}
+                  </button>
+                ))}
+              </div>
+
+              {/* Tab views */}
+              <div className="text-xs text-slate-500 dark:text-slate-400 space-y-3 leading-relaxed">
+                {activeTab === 'cloudflare' && (
+                  <>
+                    <p>1. Ve al panel de control de <strong>Cloudflare</strong> y selecciona tu dominio.</p>
+                    <p>2. Haz clic en la pestaña lateral de <strong>DNS</strong> {`->`} <strong>Registros</strong>.</p>
+                    <p>3. Añade dos registros de tipo <strong>MX</strong>: uno con Name <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">@</code>, Server <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">mx1.improvmx.com</code> y prioridad <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">10</code>; el segundo con Server <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">mx2.improvmx.com</code> y prioridad <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">20</code>.</p>
+                    <p>4. Agrega los registros de tipo <strong>TXT</strong> (SPF, etc.) utilizando el botón copiar del panel izquierdo.</p>
+                    <p>5. Desactiva el Proxy de Cloudflare (la nube naranja) en estos registros de ser aplicable.</p>
+                  </>
+                )}
+                {activeTab === 'godaddy' && (
+                  <>
+                    <p>1. Inicia sesión en <strong>GoDaddy</strong>, entra en "Mis productos" y haz clic en <strong>DNS</strong> al lado de tu dominio.</p>
+                    <p>2. En la tabla de registros dns, haz clic en el botón <strong>Add New Record</strong>.</p>
+                    <p>3. Añade dos registros de tipo <strong>MX</strong>: uno con Host <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">@</code>, Points to <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">mx1.improvmx.com</code> y prioridad <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">10</code>; el segundo apuntando a <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">mx2.improvmx.com</code> y prioridad <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">20</code>.</p>
+                    <p>4. Guarda y repite para los de tipo TXT.</p>
+                  </>
+                )}
+                {activeTab === 'namecheap' && (
+                  <>
+                    <p>1. Ingresa a la consola de <strong>Namecheap</strong>, haz clic en "Domain List" y presiona <strong>Manage</strong> al lado de tu dominio.</p>
+                    <p>2. Ve a la sección de <strong>Advanced DNS</strong>.</p>
+                    <p>3. En "Mail Settings", cámbialo a <strong>Custom MX</strong> e ingresa el primer host <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">@</code>, address <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">mx1.improvmx.com</code> y prioridad <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">10</code>. Añade el segundo apuntando a <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">mx2.improvmx.com</code> con prioridad <code className="bg-slate-50 dark:bg-slate-950 px-1 py-0.5 rounded font-mono border border-slate-150">20</code>.</p>
+                    <p>4. Agrega los demás registros presionando "Add New Record" de tipo TXT.</p>
+                  </>
+                )}
+                <div className="pt-3 border-t border-slate-150 dark:border-slate-800 flex items-center space-x-1.5 text-amber-700 font-light">
+                  <Info className="h-3 w-3 shrink-0" />
+                  <span>La propagación global de DNS suele tardar de 5 a 15 minutos en completarse de forma estándar.</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
