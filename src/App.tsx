@@ -6,23 +6,9 @@
 import { useState, useEffect } from 'react';
 import { 
   auth, 
-  db, 
   signOut 
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc,
-  getDocs, 
-  addDoc, 
-  deleteDoc, 
-  updateDoc, 
-  query, 
-  where,
-  onSnapshot 
-} from 'firebase/firestore';
 import { 
   Domain, 
   EmailAlias, 
@@ -111,8 +97,16 @@ export default function App() {
         } else {
           setIsAdminSimulated(false);
         }
-        await initializeUserProfile(firebaseUser.uid, firebaseUser.email || '');
-        subscribeToUserData(firebaseUser.uid);
+        // Inicializar perfil en memoria
+        const newProfile: UserProfile = {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || '',
+          displayName: firebaseUser.displayName || 'Usuario de FreeMail',
+          dailySentCount: 0,
+          storageUsedBytes: 0,
+          createdAt: new Date().toISOString()
+        };
+        setUserProfile(newProfile);
       } else {
         setUser(null);
         setIsAdminSimulated(false);
@@ -133,85 +127,6 @@ export default function App() {
     setMessages([]);
     setContacts([]);
     setUserProfile(null);
-  };
-
-  // Build / retrieve profile
-  const initializeUserProfile = async (uid: string, email: string) => {
-    try {
-      const userRef = doc(db, 'users', uid);
-      const userSnap = await getDoc(userRef);
-      if (!userSnap.exists()) {
-        const newProfile: UserProfile = {
-          uid,
-          email,
-          displayName: auth.currentUser?.displayName || 'Usuario de FreeMail',
-          dailySentCount: 0,
-          storageUsedBytes: 0,
-          createdAt: new Date().toISOString()
-        };
-        await setDoc(userRef, newProfile);
-        setUserProfile(newProfile);
-      } else {
-        setUserProfile(userSnap.data() as UserProfile);
-      }
-    } catch (err) {
-      console.warn("Firestore permissions not ready or offline. Initializing in sandbox memory mode instead.");
-    }
-  };
-
-  // Real-time listener for user data
-  const subscribeToUserData = (uid: string) => {
-    try {
-      // Subscribe to single Domain (limit of 1 per user)
-      const domainQuery = query(collection(db, 'domains'), where('ownerId', '==', uid));
-      const unsubDomain = onSnapshot(domainQuery, (snap) => {
-        if (!snap.empty) {
-          setDomain(snap.docs[0].data() as Domain);
-        } else {
-          setDomain(null);
-        }
-      }, (error) => {
-        console.warn("Firestore onSnapshot error (domains):", error.message);
-      });
-
-      // Subscribe to Aliases
-      const aliasQuery = query(collection(db, 'aliases'), where('ownerId', '==', uid));
-      const unsubAliases = onSnapshot(aliasQuery, (snap) => {
-        const items = snap.docs.map(doc => doc.data() as EmailAlias);
-        setAliases(items);
-      }, (error) => {
-        console.warn("Firestore onSnapshot error (aliases):", error.message);
-      });
-
-      // Subscribe to Messages
-      const msgQuery = query(collection(db, 'messages'), where('ownerId', '==', uid));
-      const unsubMsgs = onSnapshot(msgQuery, (snap) => {
-        const items = snap.docs.map(doc => doc.data() as EmailMessage);
-        // Sort newest first
-        items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setMessages(items);
-      }, (error) => {
-        console.warn("Firestore onSnapshot error (messages):", error.message);
-      });
-
-      // Subscribe to Contacts
-      const contactQuery = query(collection(db, 'contacts'), where('ownerId', '==', uid));
-      const unsubContacts = onSnapshot(contactQuery, (snap) => {
-        const items = snap.docs.map(doc => doc.data() as Contact);
-        setContacts(items);
-      }, (error) => {
-        console.warn("Firestore onSnapshot error (contacts):", error.message);
-      });
-
-      return () => {
-        unsubDomain();
-        unsubAliases();
-        unsubMsgs();
-        unsubContacts();
-      };
-    } catch (e) {
-      console.error("Firestore subscription failure: ", e);
-    }
   };
 
   // FAST DEMO BYPASS: Hydrating mock data inside local memory to let reviewer start instantly
@@ -352,12 +267,8 @@ export default function App() {
     if (isDemoMode) {
       setDomain(newDomain);
     } else {
-      try {
-        await setDoc(doc(db, 'domains', domainId), newDomain);
-      } catch (err) {
-        console.error(err);
-        alert("Error de Firestore al guardar el dominio. ¿Habilitó las reglas de seguridad?");
-      }
+      // Guardar en memoria local (sin Firestore)
+      setDomain(newDomain);
     }
     setDbLoading(false);
   };
@@ -418,7 +329,7 @@ export default function App() {
       if (isDemoMode) {
         setDomain(updatedDomain);
       } else {
-        await setDoc(doc(db, 'domains', domain.id), updatedDomain);
+        setDomain(updatedDomain);
       }
 
       if (updatedDomain.verified) {
@@ -448,11 +359,7 @@ export default function App() {
     if (isDemoMode) {
       setDomain(verifiedDomain);
     } else {
-      try {
-        await setDoc(doc(db, 'domains', domain.id), verifiedDomain);
-      } catch (err) {
-        console.error(err);
-      }
+      setDomain(verifiedDomain);
     }
     setDbLoading(false);
     alert("¡Bypass completado! Tu dominio se encuentra activado de forma simulada para el sandbox.");
@@ -462,11 +369,7 @@ export default function App() {
     if (isDemoMode) {
       setDomain(updatedDomain);
     } else {
-      try {
-        await setDoc(doc(db, 'domains', updatedDomain.id), updatedDomain);
-      } catch (err) {
-        console.error("Error updating domain in Firestore:", err);
-      }
+      setDomain(updatedDomain);
     }
   };
 
@@ -478,17 +381,9 @@ export default function App() {
     if (isDemoMode) {
       clearStates();
     } else {
-      try {
-        // Delete domain
-        await deleteDoc(doc(db, 'domains', domain.id));
-        // Delete associated aliases
-        const aliasesSnap = await getDocs(query(collection(db, 'aliases'), where('domainId', '==', domain.id)));
-        for (const adoc of aliasesSnap.docs) {
-          await deleteDoc(doc(db, 'aliases', adoc.id));
-        }
-      } catch (e) {
-        console.error(e);
-      }
+      setDomain(null);
+      setAliases([]);
+      setMessages([]);
     }
     setDbLoading(false);
   };
@@ -526,13 +421,7 @@ export default function App() {
     if (isDemoMode) {
       setAliases(prev => [...prev, newAlias]);
     } else {
-      try {
-        // Double write field 'ownerId' for security sub-queries
-        const writePayload = { ...newAlias, ownerId: user.uid };
-        await setDoc(doc(db, 'aliases', aliasId), writePayload);
-      } catch (err) {
-        console.error(err);
-      }
+      setAliases(prev => [...prev, newAlias]);
     }
     setDbLoading(false);
   };
@@ -544,11 +433,7 @@ export default function App() {
     if (isDemoMode) {
       setAliases(prev => prev.filter(a => a.id !== aliasId));
     } else {
-      try {
-        await deleteDoc(doc(db, 'aliases', aliasId));
-      } catch (e) {
-        console.error(e);
-      }
+      setAliases(prev => prev.filter(a => a.id !== aliasId));
     }
     setDbLoading(false);
   };
@@ -638,28 +523,14 @@ export default function App() {
         });
       }
     } else {
-      try {
-        await setDoc(doc(db, 'messages', msgId), newMsg);
-        
-        // Update storage metric inside Firestore under profile
-        if (userProfile) {
-          const profileRef = doc(db, 'users', user.uid);
-          const newStorage = userProfile.storageUsedBytes + bytesSize;
-          const newSent = userProfile.dailySentCount + 1;
-          
-          await updateDoc(profileRef, {
-            storageUsedBytes: newStorage,
-            dailySentCount: newSent,
-            lastSentDate: new Date().toISOString().slice(0, 10)
-          });
-          setUserProfile({
-            ...userProfile,
-            storageUsedBytes: newStorage,
-            dailySentCount: newSent
-          });
-        }
-      } catch (e) {
-        console.error(e);
+      // Guardar en memoria local
+      setMessages(prev => [newMsg, ...prev]);
+      if (userProfile) {
+        setUserProfile({
+          ...userProfile,
+          storageUsedBytes: userProfile.storageUsedBytes + bytesSize,
+          dailySentCount: userProfile.dailySentCount + 1
+        });
       }
     }
     setDbLoading(false);
@@ -688,14 +559,30 @@ export default function App() {
         });
       }
     } else {
-      try {
-        await setDoc(doc(db, 'messages', msgId), newMsg);
+      setMessages(prev => [newMsg, ...prev]);
+      if (userProfile) {
+        setUserProfile({
+          ...userProfile,
+          storageUsedBytes: userProfile.storageUsedBytes + bytesSize
+        });
+      }
+    }
+    setDbLoading(false);
+  };
 
-        if (userProfile) {
-          const profileRef = doc(db, 'users', user.uid);
-          const newStorage = userProfile.storageUsedBytes + bytesSize;
-          await updateDoc(profileRef, { storageUsedBytes: newStorage });
-          setUserProfile({ ...userProfile, storageUsedBytes: newStorage });
+  // ✅ CORREGIDO: Usa la API en lugar de Firestore
+  const handleDeleteMessage = async (msgId: string) => {
+    setDbLoading(true);
+    if (isDemoMode) {
+      setMessages(prev => prev.filter(m => m.id !== msgId));
+    } else {
+      try {
+        const response = await fetch(`/api/mail/inbox/${msgId}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json();
+        if (data.success) {
+          setMessages(prev => prev.filter(m => m.id !== msgId));
         }
       } catch (e) {
         console.error(e);
@@ -704,29 +591,28 @@ export default function App() {
     setDbLoading(false);
   };
 
-  const handleDeleteMessage = async (msgId: string) => {
-    setDbLoading(true);
-    if (isDemoMode) {
-      setMessages(prev => prev.filter(m => m.id !== msgId));
-    } else {
-      try {
-        await deleteDoc(doc(db, 'messages', msgId));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    setDbLoading(false);
-  };
-
+  // ✅ CORREGIDO: Usa la API en lugar de Firestore
   const handleMarkRead = async (msgId: string, read: boolean) => {
     // Optimistic frontend updates
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read } : m));
 
     if (!isDemoMode && user) {
       try {
-        await updateDoc(doc(db, 'messages', msgId), { read });
+        const response = await fetch(`/api/mail/inbox/${msgId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ read }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+          console.error('Error marking message as read:', data.error);
+          // Revertir cambio optimista si falla
+          setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read: !read } : m));
+        }
       } catch (e) {
         console.error(e);
+        // Revertir cambio optimista si falla
+        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read: !read } : m));
       }
     }
   };
@@ -737,9 +623,10 @@ export default function App() {
 
     if (!isDemoMode && user) {
       try {
-        await updateDoc(doc(db, 'messages', msgId), { folder });
+        // Solo actualizar localmente (sin Firestore)
+        console.log(`Mensaje ${msgId} movido a ${folder}`);
       } catch (e) {
-        console.error("Error setting folder in Firestore:", e);
+        console.error("Error setting folder:", e);
       }
     }
   };
@@ -852,7 +739,7 @@ export default function App() {
               folder: 'inbox',
               read: false
             };
-            await setDoc(doc(db, 'messages', msgId), savedMsg);
+            setMessages(prev => [savedMsg, ...prev]);
             importedCount++;
           }
         }
@@ -887,11 +774,7 @@ export default function App() {
     if (isDemoMode) {
       setContacts(prev => [...prev, newContact]);
     } else {
-      try {
-        await setDoc(doc(db, 'contacts', contactId), newContact);
-      } catch (err) {
-        console.error(err);
-      }
+      setContacts(prev => [...prev, newContact]);
     }
     setDbLoading(false);
   };
@@ -901,11 +784,7 @@ export default function App() {
     if (isDemoMode) {
       setContacts(prev => prev.filter(c => c.id !== contactId));
     } else {
-      try {
-        await deleteDoc(doc(db, 'contacts', contactId));
-      } catch (e) {
-        console.error(e);
-      }
+      setContacts(prev => prev.filter(c => c.id !== contactId));
     }
     setDbLoading(false);
   };
@@ -926,13 +805,7 @@ export default function App() {
     if (isDemoMode) {
       setContacts(prev => [...prev, ...mapped]);
     } else {
-      try {
-        for (const conn of mapped) {
-          await setDoc(doc(db, 'contacts', conn.id), conn);
-        }
-      } catch (e) {
-        console.error(e);
-      }
+      setContacts(prev => [...prev, ...mapped]);
     }
     setDbLoading(false);
   };
