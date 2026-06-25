@@ -9,9 +9,9 @@ let aiClient: GoogleGenAI | null = null;
 // Inicialización diferida del cliente de Gemini
 function getGeminiClient(): GoogleGenAI | null {
   if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     console.log("[DEBUG/DNS] Obteniendo cliente de Gemini. API Key presente:", !!apiKey);
-    if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
+    if (apiKey && apiKey !== "MY_GEMINI_API_KEY" && apiKey !== "VITE_GEMINI_API_KEY") {
       try {
         aiClient = new GoogleGenAI({
           apiKey,
@@ -436,7 +436,7 @@ Tu objetivo consiste en devolver un diagnóstico completo, optimista, sumamente 
 
     console.log("[DEBUG/DNS] Solicitando diagnóstico real a Gemini...");
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: {
         systemInstruction: "Eres el Asesor Quántico de Correo y Administrador Experto de Redes de FreeMail Hub. Ayudas a los usuarios a activar sus correos personales resolviendo problemas de registros DNS (MX, SPF, DKIM, DMARC) de forma didáctica, futurista, alentadora y visualmente de vanguardia.",
