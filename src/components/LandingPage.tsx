@@ -26,7 +26,7 @@ import {
   Calendar,
   Check
 } from 'lucide-react';
-import ParticlesBackground from './DnsParticles';
+import ParticlesBackground from './ParticlesBackground';
 
 interface LandingPageProps {
   onGetStarted: () => void;
