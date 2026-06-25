@@ -49,14 +49,16 @@ app.get("/api/health", (_req, res) => {
 });
 
 // ============================================
-// WEBHOOK PARA RECIBIR CORREOS
+// WEBHOOK PARA RECIBIR CORREOS (RESEND)
 // ============================================
 
 app.post("/api/mail/webhook", async (req, res) => {
   try {
     console.log("[Webhook] 📩 Correo recibido");
+    console.log("[Webhook] Headers:", req.headers);
     console.log("[Webhook] Body:", JSON.stringify(req.body, null, 2));
     
+    // Resend envía los datos en diferentes formatos
     const payload = req.body.data || req.body;
     
     // Extraer remitente
@@ -142,6 +144,7 @@ app.post("/api/mail/webhook", async (req, res) => {
     
   } catch (err: any) {
     console.error("[Webhook] ❌ Error:", err);
+    // Siempre responder 200 para evitar que Resend reintente
     res.status(200).json({ 
       success: false, 
       error: err.message,
@@ -205,7 +208,7 @@ app.get("/api/mail/inbox/:id", (req, res) => {
 });
 
 // ============================================
-// ACTUALIZAR CORREO (Marcar como leído) ✅ NUEVO
+// ACTUALIZAR CORREO (Marcar como leído)
 // ============================================
 
 app.patch("/api/mail/inbox/:id", (req, res) => {
@@ -277,12 +280,12 @@ app.delete("/api/mail/inbox/:id", (req, res) => {
 });
 
 // ============================================
-// ENVÍO DE CORREOS (USANDO RESEND)
+// ENVÍO DE CORREOS (USANDO RESEND) - RUTA PRINCIPAL
 // ============================================
 
-app.post("/api/mail/send-http", async (req, res) => {
+app.post("/api/mail/send", async (req, res) => {
   try {
-    console.log("[send-http] 📧 Recibida solicitud de envío");
+    console.log("[send] 📧 Recibida solicitud de envío");
     
     const { senderEmail, to, subject, body } = req.body || {};
     
@@ -295,16 +298,16 @@ app.post("/api/mail/send-http", async (req, res) => {
 
     const apiKey = process.env.RESEND_API_KEY || process.env.SMTP_PASS;
     if (!apiKey) {
-      console.error("[send-http] ❌ API Key no configurada");
+      console.error("[send] ❌ API Key no configurada");
       return res.status(400).json({
         success: false,
         error: "RESEND_API_KEY no configurada. Agrega la variable en Vercel."
       });
     }
 
-    console.log(`[send-http] 📤 De: ${senderEmail}`);
-    console.log(`[send-http] 📤 Para: ${to}`);
-    console.log(`[send-http] 📤 Asunto: ${subject}`);
+    console.log(`[send] 📤 De: ${senderEmail}`);
+    console.log(`[send] 📤 Para: ${to}`);
+    console.log(`[send] 📤 Asunto: ${subject}`);
 
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -321,10 +324,10 @@ app.post("/api/mail/send-http", async (req, res) => {
     });
 
     const data = await response.json();
-    console.log("[send-http] 📬 Respuesta de Resend:", data);
+    console.log("[send] 📬 Respuesta de Resend:", data);
 
     if (!response.ok) {
-      console.error("[send-http] ❌ Error de Resend:", data);
+      console.error("[send] ❌ Error de Resend:", data);
       return res.status(response.status).json({ 
         success: false, 
         error: data.message || "Error al enviar el correo",
@@ -348,8 +351,8 @@ app.post("/api/mail/send-http", async (req, res) => {
     
     receivedEmails.unshift(sentEmail);
     
-    console.log(`[send-http] ✅ Correo enviado con ID: ${data.id}`);
-    console.log(`[send-http] ✅ Total en bandeja: ${receivedEmails.length}`);
+    console.log(`[send] ✅ Correo enviado con ID: ${data.id}`);
+    console.log(`[send] ✅ Total en bandeja: ${receivedEmails.length}`);
 
     return res.json({ 
       success: true, 
@@ -358,7 +361,7 @@ app.post("/api/mail/send-http", async (req, res) => {
     });
 
   } catch (err: any) {
-    console.error("[send-http] ❌ Error:", err);
+    console.error("[send] ❌ Error:", err);
     return res.status(500).json({ 
       success: false, 
       error: err.message || "Error al enviar el correo",
@@ -368,13 +371,13 @@ app.post("/api/mail/send-http", async (req, res) => {
 });
 
 // ============================================
-// REDIRECCIÓN PARA /api/mail/send
+// ENVÍO DE CORREOS (RUTA ALTERNATIVA - COMPATIBILIDAD)
 // ============================================
 
-app.post("/api/mail/send", async (req, res) => {
-  console.log("[send] 🔄 Redirigiendo a /api/mail/send-http");
-  req.url = '/api/mail/send-http';
-  app.handle(req, res);
+app.post("/api/mail/send-http", async (req, res) => {
+  // Redirigir a la ruta principal
+  req.url = '/api/mail/send';
+  app._router.handle(req, res);
 });
 
 // ============================================
