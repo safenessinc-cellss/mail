@@ -31,19 +31,24 @@ import {
   Timestamp,
   serverTimestamp
 } from 'firebase/firestore';
+import { getAnalytics } from 'firebase/analytics';
 
-// Configuración de Firebase - Reemplaza con tus valores reales
+// Configuración de Firebase - Valores de tu proyecto
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "TU_API_KEY",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "TU_AUTH_DOMAIN",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "TU_PROJECT_ID",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "TU_STORAGE_BUCKET",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "TU_MESSAGING_SENDER_ID",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "TU_APP_ID"
+  apiKey: "AIzaSyBwaabxRH_bnsJ4h1Y0j_7cfqTcZDf2u8Q",
+  authDomain: "freemail-c2a13.firebaseapp.com",
+  projectId: "freemail-c2a13",
+  storageBucket: "freemail-c2a13.firebasestorage.app",
+  messagingSenderId: "219333706329",
+  appId: "1:219333706329:web:10f48f9a28e02c9bb5e748",
+  measurementId: "G-W2X0K98V7Q"
 };
 
 // Inicializar Firebase
 const app = initializeApp(firebaseConfig);
+
+// Analytics (opcional)
+const analytics = getAnalytics(app);
 
 // Autenticación
 const auth = getAuth(app);
