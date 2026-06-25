@@ -160,20 +160,15 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
     const domain = domainParam.trim().toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, "");
     console.log(`[DEBUG/DNS] Procesando verificación para el dominio limpio: ${domain}`);
 
-    // 1. Verificación MX
+    // 1. Verificación MX (Dinámica y agnóstica al proveedor)
     let mxStatus = "failed";
     let mxCurrentValue = "";
     try {
       const records = await resolveMxSecurely(domain);
       if (records && records.length > 0) {
         mxCurrentValue = records.map(r => `${r.priority} ${r.exchange}`).join(", ");
-        const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && (
-          r.exchange.toLowerCase().includes("improvmx.com") || 
-          r.exchange.toLowerCase().includes("resend.com") ||
-          r.exchange.toLowerCase().includes("hostinger.com") || 
-          r.exchange.toLowerCase().includes("hostinger.es") || 
-          r.exchange.toLowerCase().includes("hostinger.mx")
-        ));
+        // Cualquier registro MX que contenga un dominio válido (con un punto) es suficiente
+        const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && r.exchange.trim().length > 0 && r.exchange.includes("."));
         mxStatus = configured ? "verified" : "failed";
       } else {
         mxCurrentValue = "No MX records found";
@@ -182,7 +177,7 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
       mxCurrentValue = `Error: ${err.message}`;
     }
 
-    // 2. Verificación SPF
+    // 2. Verificación SPF (Dinámica y agnóstica al proveedor)
     let spfStatus = "failed";
     let spfCurrentValue = "";
     try {
@@ -191,7 +186,8 @@ router.post("/verify", async (req: Request, res: Response, next: NextFunction): 
       const spfText = flattened.find(record => record && typeof record === "string" && record.startsWith("v=spf1"));
       if (spfText) {
         spfCurrentValue = spfText;
-        const configured = spfText.includes("include:spf.improvmx.com") || spfText.includes("spf.improvmx") || spfText.includes("include:spf.resend.com") || spfText.includes("spf.resend") || spfText.includes("spf.hostinger");
+        // Cualquier registro TXT que inicie con v=spf1 es un SPF válido
+        const configured = spfText.trim().startsWith("v=spf1");
         spfStatus = configured ? "verified" : "failed";
       } else {
         spfCurrentValue = flattened.length > 0 ? "TXT records found, but no SPF starting with v=spf1" : "No TXT records found";
