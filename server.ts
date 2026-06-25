@@ -619,13 +619,8 @@ app.post("/api/dns/verify-dns", async (req, res) => {
     const checkMX = async (dom: string) => {
       try {
         const records = await resolveMxSecurely(dom);
-        const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && (
-          r.exchange.toLowerCase().includes("improvmx.com") || 
-          r.exchange.toLowerCase().includes("resend.com") ||
-          r.exchange.toLowerCase().includes("hostinger.com") || 
-          r.exchange.toLowerCase().includes("hostinger.es") || 
-          r.exchange.toLowerCase().includes("hostinger.mx")
-        ));
+        // Cualquier registro MX que contenga un dominio válido (con un punto) es suficiente
+        const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && r.exchange.trim().length > 0 && r.exchange.includes("."));
         return {
           status: configured ? "configured" : "pending",
           records,
@@ -648,11 +643,8 @@ app.post("/api/dns/verify-dns", async (req, res) => {
       try {
         const txtRecords = await resolveTxtSecurely(dom);
         const spfText = txtRecords.flat().find(record => record && typeof record === "string" && record.startsWith("v=spf1"));
-        const configured = spfText && (
-          spfText.includes("include:spf.improvmx.com") || 
-          spfText.includes("include:spf.resend.com") || 
-          spfText.includes("include:spf.hostinger.com")
-        );
+        // Cualquier registro TXT que empiece con v=spf1 es un SPF válido
+        const configured = spfText && spfText.trim().startsWith("v=spf1");
         return {
           status: configured ? "configured" : "pending",
           record: spfText ? spfText : null,
