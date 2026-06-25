@@ -121,10 +121,10 @@ export default function AdminDashboard({ currentUserEmail, isDemoMode }: AdminDa
         domainName: 'innovation.es',
         verified: true,
         createdAt: '2026-06-01T09:30:00Z',
-        mxRecord: { type: 'MX', host: '@', expectedValue: '10 mail.freemailhub.com', status: 'verified' },
-        spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.freemailhub.com ~all', status: 'verified' },
-        dkimRecord: { type: 'TXT', host: 'fmhub._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhki...', status: 'verified' },
-        dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=quarantine; pct=100', status: 'verified' }
+        mxRecord: { type: 'MX', host: '@', expectedValue: '10 mx1.improvmx.com', status: 'verified' },
+        spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.improvmx.com ~all', status: 'verified' },
+        dkimRecord: { type: 'TXT', host: 'default._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhki...', status: 'verified' },
+        dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=none; rua=mailto:dmarc@innovation.es', status: 'verified' }
       },
       {
         id: 'dom_2',
@@ -132,10 +132,10 @@ export default function AdminDashboard({ currentUserEmail, isDemoMode }: AdminDa
         domainName: 'retailglobal.cl',
         verified: false,
         createdAt: '2026-06-12T17:45:00Z',
-        mxRecord: { type: 'MX', host: '@', expectedValue: '10 mail.freemailhub.com', status: 'failed', currentValue: '10 ns1.miservidor.com' },
-        spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.freemailhub.com ~all', status: 'pending' },
-        dkimRecord: { type: 'TXT', host: 'fmhub._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhki...', status: 'pending' },
-        dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=quarantine; pct=100', status: 'pending' }
+        mxRecord: { type: 'MX', host: '@', expectedValue: '10 mx1.improvmx.com', status: 'failed', currentValue: '10 ns1.miservidor.com' },
+        spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.improvmx.com ~all', status: 'pending' },
+        dkimRecord: { type: 'TXT', host: 'default._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhki...', status: 'pending' },
+        dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=none; rua=mailto:dmarc@retailglobal.cl', status: 'pending' }
       },
       {
         id: 'dom_3',
@@ -143,10 +143,10 @@ export default function AdminDashboard({ currentUserEmail, isDemoMode }: AdminDa
         domainName: 'vortex.io',
         verified: false,
         createdAt: '2026-06-15T22:15:00Z',
-        mxRecord: { type: 'MX', host: '@', expectedValue: '10 mail.freemailhub.com', status: 'pending' },
-        spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.freemailhub.com ~all', status: 'pending' },
-        dkimRecord: { type: 'TXT', host: 'fmhub._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhki...', status: 'pending' },
-        dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=quarantine; pct=100', status: 'pending' }
+        mxRecord: { type: 'MX', host: '@', expectedValue: '10 mx1.improvmx.com', status: 'pending' },
+        spfRecord: { type: 'TXT', host: '@', expectedValue: 'v=spf1 include:spf.improvmx.com ~all', status: 'pending' },
+        dkimRecord: { type: 'TXT', host: 'default._domainkey', expectedValue: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhki...', status: 'pending' },
+        dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=none; rua=mailto:dmarc@vortex.io', status: 'pending' }
       }
     ];
 
