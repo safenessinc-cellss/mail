@@ -50,46 +50,79 @@ app.get("/api/health", (_req, res) => {
 });
 
 // ============================================
-// WEBHOOK PARA RECIBIR CORREOS (RESEND)
+// WEBHOOK PARA RECIBIR CORREOS (RESEND) - MEJORADO
 // ============================================
 
 app.post("/api/mail/webhook", async (req, res) => {
   try {
     console.log("[Webhook] 📩 Correo recibido:");
-    console.log("[Webhook] Body:", JSON.stringify(req.body, null, 2));
+    console.log("[Webhook] Body completo:", JSON.stringify(req.body, null, 2));
     
-    // Extraer datos del correo
-    const { 
-      from, 
-      to, 
-      subject, 
-      text, 
-      html, 
-      attachments,
-      createdAt,
-      id
-    } = req.body || {};
+    // Extraer datos del correo según el formato de Resend
+    // Resend envía los datos en el campo 'data' o directamente en el body
+    const data = req.body.data || req.body;
     
-    // Validar que sea un correo válido
-    if (!from && !to) {
-      console.warn("[Webhook] ⚠️ Datos incompletos, pero continuando...");
+    // Extraer información del remitente y destinatario
+    const from = data.from || data.sender || data.fromAddress || 'remitente@desconocido.com';
+    const to = data.to || data.recipient || data.toAddress || 'destinatario@desconocido.com';
+    const subject = data.subject || '(Sin Asunto)';
+    const text = data.text || data.body || '';
+    const html = data.html || data.bodyHtml || '';
+    const attachments = data.attachments || [];
+    
+    // Extraer el nombre del remitente (si está disponible)
+    let fromName = 'Remitente';
+    let fromAddress = from;
+    
+    if (typeof from === 'string' && from.includes('<')) {
+      // Formato: "Nombre <email@dominio.com>"
+      const match = from.match(/^(.*?)\s*<(.+?)>$/);
+      if (match) {
+        fromName = match[1].trim() || 'Remitente';
+        fromAddress = match[2].trim();
+      }
+    } else if (typeof from === 'string' && from.includes('@')) {
+      // Solo email
+      fromName = from.split('@')[0] || 'Remitente';
+      fromAddress = from;
+    } else if (typeof from === 'object' && from.address) {
+      // Formato objeto
+      fromName = from.name || from.address.split('@')[0] || 'Remitente';
+      fromAddress = from.address;
     }
     
-    // Crear objeto del correo
+    // Extraer el destinatario
+    let toAddress = to;
+    if (typeof to === 'string' && to.includes('<')) {
+      const match = to.match(/^(.*?)\s*<(.+?)>$/);
+      if (match) {
+        toAddress = match[2].trim();
+      }
+    } else if (typeof to === 'object' && to.address) {
+      toAddress = to.address;
+    }
+    
+    // Crear objeto del correo con datos completos
     const emailData = {
-      id: id || `email_${Date.now()}`,
-      from: from || 'remitente@desconocido.com',
-      to: to || 'destinatario@desconocido.com',
-      subject: subject || '(Sin Asunto)',
-      text: text || '',
-      html: html || '',
-      attachments: attachments || [],
-      createdAt: createdAt || new Date().toISOString(),
+      id: data.id || `email_${Date.now()}`,
+      from: fromAddress,
+      fromName: fromName,
+      to: toAddress,
+      subject: subject,
+      text: text,
+      html: html || text,
+      attachments: attachments,
+      createdAt: data.createdAt || data.timestamp || new Date().toISOString(),
       receivedAt: new Date().toISOString()
     };
     
+    console.log("[Webhook] 📧 Datos extraídos:");
+    console.log(`  De: ${fromName} <${fromAddress}>`);
+    console.log(`  Para: ${toAddress}`);
+    console.log(`  Asunto: ${subject}`);
+    
     // Almacenar en memoria
-    receivedEmails.unshift(emailData); // Agregar al inicio (más reciente primero)
+    receivedEmails.unshift(emailData);
     
     // Mantener solo los últimos 100 correos
     if (receivedEmails.length > 100) {
@@ -115,7 +148,6 @@ app.post("/api/mail/webhook", async (req, res) => {
     });
   }
 });
-
 // ============================================
 // OBTENER CORREOS RECIBIDOS (PARA EL FRONTEND)
 // ============================================
