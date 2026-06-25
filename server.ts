@@ -19,21 +19,23 @@ import dnsRoutes from "./src/dns-routes";
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-// Set Cross-Origin, CORS, and URL Normalization headers to allow Vercel and popups to communicate correctly
+// ============================================
+// 1. MIDDLEWARE CONFIGURATION (CORREGIDO)
+// ============================================
+
+// CORS y headers de seguridad
 app.use((req, res, next) => {
-  // Normalize URL for Vercel Serverless compatibility (if Vercel stripped "/api", prepend it)
+  // Normalizar URL para Vercel
   if (req.url && !req.url.startsWith("/api/") && req.url !== "/" && !req.url.startsWith("/assets/") && !req.url.startsWith("/favicon.ico")) {
     req.url = "/api" + req.url;
   }
   
-  // CORS configuration
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  
-  // COOP and COEP policies
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
   
@@ -43,7 +45,14 @@ app.use((req, res, next) => {
   next();
 });
 
-// Helper to generate UUIDs for Apple Profiles
+// Parseo de JSON (CORREGIDO: más robusto)
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+// ============================================
+// 2. HELPERS Y UTILIDADES
+// ============================================
+
 function generateUUID(): string {
   try {
     return crypto.randomUUID();
@@ -56,7 +65,6 @@ function generateUUID(): string {
   }
 }
 
-// Helper to read raw text body (for Autodiscover query xml matching)
 function getRawBody(req: express.Request): Promise<string> {
   return new Promise((resolve) => {
     if (typeof req.body === 'string') {
@@ -85,49 +93,49 @@ function getRawBody(req: express.Request): Promise<string> {
   });
 }
 
-app.use((req, res, next) => {
-  if (req.body) {
-    if (Buffer.isBuffer(req.body)) {
-      try {
-        req.body = JSON.parse(req.body.toString("utf8"));
-      } catch (_e) {}
-    } else if (typeof req.body === "string") {
-      try {
-        req.body = JSON.parse(req.body);
-      } catch (_e) {}
-    }
-    if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
-      return next();
-    }
-  }
+// ============================================
+// 3. CONFIGURACIÓN SMTP (¡NUEVA Y CORREGIDA!)
+// ============================================
 
-  express.json({ limit: '15mb' })(req, res, (err) => {
-    if (err) {
-      console.error("Error parsing JSON body with express.json:", err);
-      req.body = {};
-    }
-    next();
-  });
-});
+function getSmtpConfig(reqBody: any) {
+  // Prioridad: 1. Variables de entorno, 2. Parámetros del request, 3. Valores por defecto
+  const host = process.env.SMTP_HOST || reqBody.smtpHost || "smtp.resend.com";
+  const port = parseInt(process.env.SMTP_PORT || reqBody.smtpPort || "465");
+  const secure = process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : (port === 465);
+  
+  // Resend usa 'resend' como usuario y la API Key como contraseña
+  const user = process.env.SMTP_USER || reqBody.smtpUser || "resend";
+  const pass = process.env.SMTP_PASS || process.env.RESEND_API_KEY || reqBody.senderPassword || "";
+  
+  return { host, port, secure, user, pass };
+}
 
-// Lazy initializer for Gemini API client to avoid startup crash if key is missing
+// ============================================
+// 4. CLIENTE GEMINI (LAZY LOADING)
+// ============================================
+
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
   if (!aiClient) {
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (apiKey && apiKey !== "MY_GEMINI_API_KEY" && apiKey !== "VITE_GEMINI_API_KEY") {
-      aiClient = new GoogleGenAI({ apiKey });
+      try {
+        aiClient = new GoogleGenAI({ apiKey });
+        console.log("[Gemini] Cliente inicializado correctamente");
+      } catch (err) {
+        console.error("[Gemini] Error al inicializar cliente:", err);
+      }
+    } else {
+      console.warn("[Gemini] API Key no configurada. Usando modo simulación.");
     }
   }
   return aiClient;
 }
 
-// 1. Health check
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
-});
+// ============================================
+// 5. CRIPTOGRAFÍA PARA QR
+// ============================================
 
-// Secure Encryption Helpers for QR Code tokens
 const CRYPTO_SECRET = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "freemail-secret-key-salt-placeholder-9876";
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(CRYPTO_SECRET).digest();
 const IV_LENGTH = 16;
@@ -155,7 +163,10 @@ function decryptConfig(token: string): any {
   }
 }
 
-// Helper to generate a .mobileconfig content for given parameters
+// ============================================
+// 6. APPLE PROFILES (CÓDIGO COMPLETO)
+// ============================================
+
 function buildMobileConfigPayload(params: any): string {
   const { email, password, displayName, imapHost, imapPort, smtpHost, smtpPort, smtpSecure } = params;
   const cleanEmail = String(email || "").trim().toLowerCase();
@@ -260,7 +271,6 @@ function buildMobileConfigPayload(params: any): string {
 </plist>`;
 }
 
-// Función auxiliar para firmar perfiles con OpenSSL
 function signProfileWithOpenSSL(plistXml: string, alias: string, res: express.Response): boolean {
   try {
     const tmpDir = os.tmpdir();
@@ -272,13 +282,11 @@ function signProfileWithOpenSSL(plistXml: string, alias: string, res: express.Re
 
     fs.writeFileSync(rawPath, plistXml, "utf8");
 
-    // Generate random ca key and self certificate
     execSync(
       `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 365 -nodes -subj "/CN=FreeMail Hub Signed profile/O=FreeMail Hub/C=ES"`,
       { stdio: "ignore" }
     );
 
-    // Sign the file using generated cert
     execSync(
       `openssl smime -sign -signer "${certPath}" -inkey "${keyPath}" -nodetach -outform der -in "${rawPath}" -out "${signedPath}"`,
       { stdio: "ignore" }
@@ -286,15 +294,12 @@ function signProfileWithOpenSSL(plistXml: string, alias: string, res: express.Re
 
     if (fs.existsSync(signedPath)) {
       const signedContent = fs.readFileSync(signedPath);
-      // Limpiar archivos temporales
       try {
         fs.unlinkSync(rawPath);
         fs.unlinkSync(signedPath);
         fs.unlinkSync(certPath);
         fs.unlinkSync(keyPath);
-      } catch (_cleanErr) {
-        // Ignorar errores de limpieza
-      }
+      } catch (_cleanErr) {}
       res.send(signedContent);
       return true;
     }
@@ -304,7 +309,19 @@ function signProfileWithOpenSSL(plistXml: string, alias: string, res: express.Re
   return false;
 }
 
-// 1b. Apple .mobileconfig Profile Gen Route Handler
+// ============================================
+// 7. RUTAS DE LA API
+// ============================================
+
+// Health check
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// ============================================
+// 7a. APPLE PROFILES ROUTES
+// ============================================
+
 const handleProfileGenerate = (req: express.Request, res: express.Response) => {
   const authHeader = req.headers.authorization;
   let authenticated = false;
@@ -345,19 +362,16 @@ const handleProfileGenerate = (req: express.Request, res: express.Response) => {
   res.setHeader("Content-Type", "application/x-apple-aspen-config; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="configuracion-${alias}.mobileconfig"`);
 
-  // Intentar firmar con OpenSSL
   if (signProfileWithOpenSSL(plistXml, alias, res)) {
     return;
   }
 
-  // Fallback: enviar sin firmar
   res.send(plistXml);
 };
 
 app.post("/api/profile/generate", handleProfileGenerate);
 app.post("/api/generate-mobileconfig", handleProfileGenerate);
 
-// Multi-device endpoint returning a simple base64 encoded string
 app.post("/api/profile/base64", (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -373,8 +387,6 @@ app.post("/api/profile/base64", (req, res) => {
     res.status(500).json({ error: "No se pudo generar el formato base64 del perfil", details: err.message });
   }
 });
-
-// --- QR CODE ENDPOINTS ---
 
 app.post("/api/profile/qr-token", (req, res) => {
   try {
@@ -400,7 +412,6 @@ app.post("/api/profile/qr-token", (req, res) => {
   }
 });
 
-// Direct download via QR token
 app.get("/api/profile/download-qr", (req, res) => {
   const token = req.query.token;
   if (!token || typeof token !== "string") {
@@ -420,16 +431,17 @@ app.get("/api/profile/download-qr", (req, res) => {
   res.setHeader("Content-Type", "application/x-apple-aspen-config; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="configuracion-${alias}.mobileconfig"`);
 
-  // Intentar firmar con OpenSSL
   if (signProfileWithOpenSSL(plistXml, alias, res)) {
     return;
   }
 
-  // Fallback: enviar sin firmar
   res.send(plistXml);
 });
 
-// 1c. Android Autodiscover XML route
+// ============================================
+// 7b. AUTODISCOVER ROUTES
+// ============================================
+
 const handleAutodiscover = async (req: express.Request, res: express.Response) => {
   let email = "usuario@midominio.com";
   let displayName = "Usuario FreeMail";
@@ -499,7 +511,10 @@ const handleAutodiscover = async (req: express.Request, res: express.Response) =
 app.all("/autodiscover/autodiscover.xml", handleAutodiscover);
 app.all("/Autodiscover/Autodiscover.xml", handleAutodiscover);
 
-// 2. DNS Lookup Helpers with DoH Fail-Safe Fallbacks
+// ============================================
+// 7c. DNS ROUTES
+// ============================================
+
 async function resolveDnsViaDoH(name: string, type: string): Promise<string[]> {
   const providers = [
     async () => {
@@ -614,10 +629,8 @@ async function resolveCnameSecurely(domain: string): Promise<string[]> {
   return await resolveDnsViaDoH(domain, "CNAME");
 }
 
-// 2. DNS Verification Route (Delegated to /backend/routes/dns.js)
 app.use("/api/dns", dnsRoutes);
 
-// 2c. Custom direct DNS verify-dns endpoint
 app.post("/api/dns/verify-dns", async (req, res) => {
   const domainParam = req.body?.domain || req.body?.domainName;
 
@@ -634,7 +647,6 @@ app.post("/api/dns/verify-dns", async (req, res) => {
     const checkMX = async (dom: string) => {
       try {
         const records = await resolveMxSecurely(dom);
-        // Cualquier registro MX que contenga un dominio válido (con un punto) es suficiente
         const configured = records.some(r => r && r.exchange && typeof r.exchange === "string" && r.exchange.trim().length > 0 && r.exchange.includes("."));
         return {
           status: configured ? "configured" : "pending",
@@ -658,7 +670,6 @@ app.post("/api/dns/verify-dns", async (req, res) => {
       try {
         const txtRecords = await resolveTxtSecurely(dom);
         const spfText = txtRecords.flat().find(record => record && typeof record === "string" && record.startsWith("v=spf1"));
-        // Cualquier registro TXT que empiece con v=spf1 es un SPF válido
         const configured = spfText && spfText.trim().startsWith("v=spf1");
         return {
           status: configured ? "configured" : "pending",
@@ -748,7 +759,6 @@ app.post("/api/dns/verify-dns", async (req, res) => {
   }
 });
 
-// 2b. Custom DNS Verification Route
 app.post("/api/dns/verify-custom", async (req, res) => {
   const { domainName, type, host, value } = req.body || {};
   if (!domainName || !type || !value) {
@@ -794,32 +804,45 @@ app.post("/api/dns/verify-custom", async (req, res) => {
   return res.json({ status, currentValue });
 });
 
-// 2b. Real SMTP send route
+// ============================================
+// 7d. SMTP SEND ROUTE (¡CORREGIDA!)
+// ============================================
+
 app.post("/api/mail/send", async (req, res) => {
-  let host = process.env.SMTP_HOST || "smtp.resend.com";
-  let port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587;
   try {
-    const { senderEmail, senderPassword, to, subject, body, attachments, smtpHost, smtpPort, smtpSecure } = req.body || {};
+    console.log("[SMTP] Recibida solicitud de envío");
+    
+    const { senderEmail, senderPassword, to, subject, body, attachments } = req.body || {};
+    
+    // Validaciones básicas
     if (!senderEmail || !to) {
-      return res.status(400).json({ success: false, error: "Campos SMTP obligatorios incompletos (Emisor o receptor faltante)" });
-    }
-    if (!senderPassword && !process.env.SMTP_PASS) {
-      return res.status(400).json({ success: false, error: "Contraseña SMTP requerida" });
+      return res.status(400).json({ 
+        success: false, 
+        error: "Faltan campos obligatorios: senderEmail y to son requeridos" 
+      });
     }
 
-    host = process.env.SMTP_HOST || smtpHost || "smtp.resend.com";
-    port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : (smtpPort ? Number(smtpPort) : 587);
-    const secure = smtpSecure !== undefined ? Boolean(smtpSecure) : (port === 465);
-    const finalUser = process.env.SMTP_USER || senderEmail;
-    const finalPass = process.env.SMTP_PASS || senderPassword;
+    // Obtener configuración SMTP
+    const { host, port, secure, user, pass } = getSmtpConfig(req.body);
+    
+    console.log(`[SMTP] Configuración: host=${host}, port=${port}, secure=${secure}, user=${user}`);
 
+    if (!pass) {
+      console.error("[SMTP] Error: Contraseña SMTP no configurada");
+      return res.status(400).json({
+        success: false,
+        error: "Contraseña SMTP no configurada. Verifica SMTP_PASS o RESEND_API_KEY en variables de entorno."
+      });
+    }
+
+    // Crear transporter
     const transporter = nodemailer.createTransport({
       host,
       port,
       secure,
       auth: {
-        user: finalUser,
-        pass: finalPass,
+        user,
+        pass,
       },
       connectionTimeout: 15000,
       tls: {
@@ -827,14 +850,29 @@ app.post("/api/mail/send", async (req, res) => {
       }
     });
 
+    // Verificar conexión
+    try {
+      await transporter.verify();
+      console.log("[SMTP] Conexión verificada correctamente");
+    } catch (verifyErr: any) {
+      console.error("[SMTP] Error de verificación:", verifyErr.message);
+      return res.status(500).json({
+        success: false,
+        error: "No se pudo conectar con el servidor SMTP",
+        details: verifyErr.message
+      });
+    }
+
+    // Preparar correo
     const mailOptions: any = {
-      from: `"${(senderEmail || "").split('@')[0]}" <${senderEmail}>`,
+      from: `"${senderEmail.split('@')[0]}" <${senderEmail}>`,
       to,
       subject: subject || "(Sin Asunto)",
       text: body || "",
       html: (body || "").replace(/\n/g, "<br/>"),
     };
 
+    // Manejar adjuntos
     if (attachments && attachments.length > 0) {
       mailOptions.attachments = attachments.map((att: any) => {
         if (att && att.content && typeof att.content === "string") {
@@ -854,25 +892,35 @@ app.post("/api/mail/send", async (req, res) => {
       });
     }
 
+    // Enviar
     const info = await transporter.sendMail(mailOptions);
-    return res.json({ success: true, messageId: info.messageId });
+    console.log(`[SMTP] Correo enviado exitosamente. MessageId: ${info.messageId}`);
+    
+    return res.json({ 
+      success: true, 
+      messageId: info.messageId,
+      message: "Correo enviado correctamente"
+    });
+
   } catch (err: any) {
-    console.error("Nodemailer SMTP sending error:", err);
-    const smtpErrorMessage = err.response || err.message || "Error desconocido devuelto por el servidor SMTP";
-    return res.status(500).json({ 
-      success: false, 
-      error: `Error de autenticación o de envío en servidor SMTP (${host}:${port}).`, 
-      details: smtpErrorMessage 
+    console.error("[SMTP] Error detallado:", err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Error al enviar el correo",
+      details: err.response || err.code || "Error desconocido"
     });
   }
 });
 
-// 2c. Real IMAP sync route
+// ============================================
+// 7e. IMAP SYNC ROUTE
+// ============================================
+
 app.post("/api/mail/sync", async (req, res) => {
   try {
     const { email, password, imapHost, imapPort } = req.body || {};
     if (!email || !password) {
-      return res.status(400).json({ error: "Parámetros IMAP obligatorios incompletos" });
+      return res.status(400).json({ error: "Email y contraseña son obligatorios" });
     }
 
     const host = imapHost || "imap.hostinger.com";
@@ -936,7 +984,7 @@ app.post("/api/mail/sync", async (req, res) => {
             fromName: msg.envelope.from && msg.envelope.from[0]?.name ? msg.envelope.from[0].name : (msg.envelope.from && msg.envelope.from[0]?.address ? msg.envelope.from[0].address.split("@")[0] : 'Desconocido'),
             fromAddress: msg.envelope.from && msg.envelope.from[0]?.address ? msg.envelope.from[0].address : 'unknown@domain.com',
             subject: msg.envelope.subject || "(Sin Asunto)",
-            body: bodyText || "Buzón de entrada vacío o formato de correo multipart no estructurado",
+            body: bodyText || "Buzón de entrada vacío",
             createdAt: msg.envelope.date ? msg.envelope.date.toISOString() : new Date().toISOString(),
           });
         }
@@ -951,21 +999,26 @@ app.post("/api/mail/sync", async (req, res) => {
 
     res.json({ success: true, messages: parsedEmails });
   } catch (err: any) {
-    console.error("imapflow connection error:", err);
-    res.status(500).json({ error: "Fallo de autenticación o conexión con imap.hostinger.com (puerto 993). Verifique sus credenciales.", details: err.message });
+    console.error("[IMAP] Error:", err);
+    res.status(500).json({ error: "Error de conexión IMAP", details: err.message });
   }
 });
 
-// 3. AI Helper: Autowrite / Improve email draft using Gemini
+// ============================================
+// 7f. AI DRAFT ROUTE
+// ============================================
+
 app.post("/api/ai/draft", async (req, res) => {
   try {
     const { prompt, currentSubject, currentBody, tone } = req.body || {};
     if (!prompt) {
-      return res.status(400).json({ error: "Prompt is required" });
+      return res.status(400).json({ error: "El prompt es requerido" });
     }
 
     const ai = getGeminiClient();
+    
     if (!ai) {
+      // Modo simulación
       const simulatedSubjects: Record<string, string> = {
         professional: "Propuesta de colaboración comercial",
         formal: "Solicitud de información oficial",
@@ -975,32 +1028,27 @@ app.post("/api/ai/draft", async (req, res) => {
       
       const selectedTone = tone || "professional";
       const simulatedSubject = currentSubject || simulatedSubjects[selectedTone] || "Planificación y Detalles";
-      const simulatedBody = `[Simulado - Configures su clave GEMINI_API_KEY para respuestas reales de IA]\n\nEstimado contacto,\n\nEscribo con respecto a su solicitud: "${prompt}".\n\nHemos preparado la información correspondiente de manera ${selectedTone}. Quedamos atentos a cualquier duda o aclaración.\n\nAtentamente,\nEl equipo de FreeMail Hub (Drafting Engine)`;
+      const simulatedBody = `[SIMULADO - Configura GEMINI_API_KEY para IA real]\n\nEstimado contacto,\n\nEscribo con respecto a su solicitud: "${prompt}".\n\nHemos preparado la información correspondiente de manera ${selectedTone}. Quedamos atentos a cualquier duda.\n\nAtentamente,\nEl equipo de FreeMail Hub`;
       
       return res.json({
         subject: simulatedSubject,
         body: simulatedBody,
         simulated: true,
-        hint: "Para utilizar el servicio de IA de Gemini real, configure su clave GEMINI_API_KEY."
+        hint: "Para usar IA real, configura GEMINI_API_KEY en variables de entorno."
       });
     }
 
     try {
-      const fullPrompt = `Genera un asunto y un cuerpo de correo electrónico profesional y claro basado en la siguiente instrucción del usuario:
+      const fullPrompt = `Genera un asunto y cuerpo de correo profesional basado en:
       
       Instrucción: "${prompt}"
-      Tono deseado: ${tone || 'profesional'}
+      Tono: ${tone || 'profesional'}
       Asunto actual: "${currentSubject || '(Vacío)'}"
       Cuerpo actual: "${currentBody || '(Vacío)'}"
       
-      Por favor devuelve EXACTAMENTE una respuesta con formato JSON con el formato:
-      {
-        "subject": "El asunto recomendado",
-        "body": "El cuerpo del correo electrónico completo, formateado con saltos de línea elegantes y sin código markdown excesivo"
-      }
-      No agregues introducciones, bloques de código markdown triple barra, ni notas adicionales. Devuelve solo el objeto JSON válido.`;
+      Devuelve EXACTAMENTE JSON: {"subject": "...", "body": "..."}`;
 
-      const modelName = 'gemini-2.5-flash';
+      const modelName = 'gemini-2.0-flash-exp';
       const response = await ai.models.generateContent({
         model: modelName,
         contents: fullPrompt
@@ -1016,7 +1064,7 @@ app.post("/api/ai/draft", async (req, res) => {
       try {
         const parsed = JSON.parse(cleanJson);
         res.json({
-          subject: parsed.subject || currentSubject || "Asunto sugerido por IA",
+          subject: parsed.subject || currentSubject || "Asunto sugerido",
           body: parsed.body || text,
           simulated: false
         });
@@ -1028,14 +1076,19 @@ app.post("/api/ai/draft", async (req, res) => {
         });
       }
     } catch (err: any) {
-      res.status(500).json({ error: "Error contacting Gemini API", details: err.message });
+      console.error("[AI] Error:", err);
+      res.status(500).json({ error: "Error con Gemini API", details: err.message });
     }
   } catch (err: any) {
+    console.error("[AI] Error general:", err);
     res.status(500).json({ error: "Error en el endpoint", details: err.message });
   }
 });
 
-// Configure Vite integration or static file rendering
+// ============================================
+// 8. SERVIDOR
+// ============================================
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     try {
@@ -1061,14 +1114,16 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[FreeMail Hub Server] Running on http://localhost:${PORT}`);
+    console.log(`[FreeMail Hub] Servidor corriendo en http://localhost:${PORT}`);
+    console.log(`[FreeMail Hub] Configuración SMTP: ${process.env.SMTP_HOST || 'smtp.resend.com'}`);
+    console.log(`[FreeMail Hub] Gemini: ${process.env.GEMINI_API_KEY ? '✅ Configurado' : '❌ No configurado'}`);
   });
 }
 
-// Export for Vercel
+// Exportar para Vercel
 export default app;
 
-// Solo iniciar el servidor si no está en Vercel
+// Iniciar solo si no estamos en Vercel
 if (!process.env.VERCEL) {
   startServer().catch(console.error);
 }
