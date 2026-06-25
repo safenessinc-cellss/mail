@@ -140,7 +140,7 @@ export default function MultiDomainArchitecture({ userEmail }: MultiDomainArchit
       if (lowerQ.includes('vps') || lowerQ.includes('host') || lowerQ.includes('servidor')) {
         fallbackText = `Para desplegar un VPS propio (DigitalOcean, AWS EC2, u Hostinger VPS): \n1) Instala Ubuntu Server 22.04 LTS.\n2) Ejecuta el instalador de Docker y levanta Mailpit en el puerto 25 usando el comando: \`docker run -d -p 25:1025 -p 8025:8025 axllent/mailpit\`.\n3) Configura un túnel reverso o expón el puerto 25 en tus reglas de Firewall.`;
       } else if (lowerQ.includes('spam') || lowerQ.includes('gmail') || lowerQ.includes('outlook') || lowerQ.includes('filtro')) {
-        fallbackText = `El filtrado de spam se rige por la reputación de la IP y la criptografía DNS. Asegúrate de configurar:\n- **SPF**: \`v=spf1 include:spf.hostinger.com ~all\`\n- **DKIM**: registro TXT con selector \`default._domainkey\`\n- **DMARC**: entrada TXT en \`_dmarc.${cleanDomain}\` con valor \`v=DMARC1; p=quarantine; rua=mailto:dmarc@${cleanDomain}\`. Esto evitará que tus correos se consideren sospechosos.`;
+        fallbackText = `El filtrado de spam se rige por la reputación de la IP y la criptografía DNS. Asegúrate de configurar:\n- **SPF**: \`v=spf1 include:spf.improvmx.com include:spf.resend.com ~all\`\n- **DKIM**: registro TXT con selector \`default._domainkey\`\n- **DMARC**: entrada TXT en \`_dmarc.${cleanDomain}\` con valor \`v=DMARC1; p=quarantine; rua=mailto:dmarc@${cleanDomain}\`. Esto evitará que tus correos se consideren sospechosos.`;
       } else if (lowerQ.includes('improv') || lowerQ.includes('forward') || lowerQ.includes('reenvio')) {
         fallbackText = `Los servicios de reenvío como ImprovMX funcionan interceptando tus registros MX en sus propios servidores DNS de correo. Al recibir una comunicación entrante, consultan sus bases de datos internas y reenvían la carga por SMTP seguro (puerto 465) a tu cuenta objetivo (como Gmail o un webhook de Vercel). Esto te ahorra configurar servidores SMTP entrantes.`;
       } else {
@@ -154,7 +154,7 @@ export default function MultiDomainArchitecture({ userEmail }: MultiDomainArchit
 
   // Option 1 variables
   const opt1MxExpected = "10 mx1.improvmx.com\n20 mx2.improvmx.com";
-  const opt1SpfExpected = `v=spf1 include:spf.improvmx.com include:spf.hostinger.com ~all`;
+  const opt1SpfExpected = `v=spf1 include:spf.improvmx.com include:spf.resend.com ~all`;
   const opt1DmarcExpected = `v=DMARC1; p=none; rua=mailto:dmarc@${cleanDomain}`;
   const opt1NodeCode = `// API Route para Vercel: /api/mail/send.ts
 import { Request, Response } from "express";
