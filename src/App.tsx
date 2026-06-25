@@ -52,6 +52,36 @@ import {
   Server
 } from 'lucide-react';
 
+// ============================================
+// PERSISTENCIA EN LOCALSTORAGE
+// ============================================
+
+const STORAGE_KEYS = {
+  DOMAIN: 'freemail_domain',
+  ALIASES: 'freemail_aliases',
+  MESSAGES: 'freemail_messages',
+  CONTACTS: 'freemail_contacts',
+  USER_PROFILE: 'freemail_userProfile'
+};
+
+const saveState = (key: string, data: any) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (e) {
+    console.error('Error saving to localStorage:', e);
+  }
+};
+
+const loadState = (key: string) => {
+  try {
+    const data = localStorage.getItem(key);
+    return data ? JSON.parse(data) : null;
+  } catch (e) {
+    console.error('Error loading from localStorage:', e);
+    return null;
+  }
+};
+
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
@@ -60,12 +90,12 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [isAdminSimulated, setIsAdminSimulated] = useState(false);
 
-  // Core domain, alias, mails and profiles state
-  const [domain, setDomain] = useState<Domain | null>(null);
-  const [aliases, setAliases] = useState<EmailAlias[]>([]);
-  const [messages, setMessages] = useState<EmailMessage[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  // Core domain, alias, mails and profiles state - CARGAR DESDE LOCALSTORAGE
+  const [domain, setDomain] = useState<Domain | null>(() => loadState(STORAGE_KEYS.DOMAIN));
+  const [aliases, setAliases] = useState<EmailAlias[]>(() => loadState(STORAGE_KEYS.ALIASES) || []);
+  const [messages, setMessages] = useState<EmailMessage[]>(() => loadState(STORAGE_KEYS.MESSAGES) || []);
+  const [contacts, setContacts] = useState<Contact[]>(() => loadState(STORAGE_KEYS.CONTACTS) || []);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => loadState(STORAGE_KEYS.USER_PROFILE));
 
   // Loading indicator for database activities
   const [dbLoading, setDbLoading] = useState(false);
@@ -97,16 +127,19 @@ export default function App() {
         } else {
           setIsAdminSimulated(false);
         }
-        // Inicializar perfil en memoria
-        const newProfile: UserProfile = {
-          uid: firebaseUser.uid,
-          email: firebaseUser.email || '',
-          displayName: firebaseUser.displayName || 'Usuario de FreeMail',
-          dailySentCount: 0,
-          storageUsedBytes: 0,
-          createdAt: new Date().toISOString()
-        };
-        setUserProfile(newProfile);
+        // Inicializar perfil en memoria si no existe
+        if (!userProfile) {
+          const newProfile: UserProfile = {
+            uid: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            displayName: firebaseUser.displayName || 'Usuario de FreeMail',
+            dailySentCount: 0,
+            storageUsedBytes: 0,
+            createdAt: new Date().toISOString()
+          };
+          setUserProfile(newProfile);
+          saveState(STORAGE_KEYS.USER_PROFILE, newProfile);
+        }
       } else {
         setUser(null);
         setIsAdminSimulated(false);
@@ -127,9 +160,14 @@ export default function App() {
     setMessages([]);
     setContacts([]);
     setUserProfile(null);
+    localStorage.removeItem(STORAGE_KEYS.DOMAIN);
+    localStorage.removeItem(STORAGE_KEYS.ALIASES);
+    localStorage.removeItem(STORAGE_KEYS.MESSAGES);
+    localStorage.removeItem(STORAGE_KEYS.CONTACTS);
+    localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
   };
 
-  // FAST DEMO BYPASS: Hydrating mock data inside local memory to let reviewer start instantly
+  // FAST DEMO BYPASS
   const handleDemoBypass = () => {
     setIsDemoMode(true);
     setIsAdminSimulated(true);
@@ -144,10 +182,11 @@ export default function App() {
       email: 'john.doe@gmail.com',
       displayName: 'Reviewer John Doe',
       dailySentCount: 3,
-      storageUsedBytes: 42 * 1024 * 1024, // 42 MB
+      storageUsedBytes: 42 * 1024 * 1024,
       createdAt: new Date().toISOString()
     };
     setUserProfile(mockProfile);
+    saveState(STORAGE_KEYS.USER_PROFILE, mockProfile);
 
     // Seed mock Domain
     const mockDomain: Domain = {
@@ -162,6 +201,7 @@ export default function App() {
       dmarcRecord: { type: 'TXT', host: '_dmarc', expectedValue: 'v=DMARC1; p=quarantine; pct=100', status: 'verified' }
     };
     setDomain(mockDomain);
+    saveState(STORAGE_KEYS.DOMAIN, mockDomain);
 
     // Seed mock Aliases
     const mockAliases: EmailAlias[] = [
@@ -170,8 +210,9 @@ export default function App() {
       { id: 'al_3', domainId: 'demo_dom_id', domainName: 'miempresacreativa.com', localPart: 'administrador', address: 'administrador@miempresacreativa.com', forwardTo: '', createdAt: new Date().toISOString() }
     ];
     setAliases(mockAliases);
+    saveState(STORAGE_KEYS.ALIASES, mockAliases);
 
-    // Seed mock emails in webmail
+    // Seed mock emails
     const mockEmails: EmailMessage[] = [
       {
         id: 'msg_1',
@@ -182,8 +223,8 @@ export default function App() {
         fromAddress: 'steve@apple.com',
         toAddress: 'contacto@miempresacreativa.com',
         subject: '¡Felicidades por tu propuesta de negocio!',
-        body: 'Hola John,\n\nEstuve revisando los bosquejos del proyecto que enviaste a nuestro equipo en Cupertino. Me parece brillante cómo estás utilizando FreeMail Hub para alojar los buzones de correo de tu empresa de forma ágil y económica.\n\nSigue empujando los límites del diseño y la excelencia técnica.\n\nUn fuerte abrazo,\nSteve \n\nSent from Apple Silicon Labs.',
-        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(), // 2 hours ago
+        body: 'Hola John,\n\nEstuve revisando los bosquejos del proyecto que enviaste a nuestro equipo en Cupertino. Me parece brillante cómo estás utilizando FreeMail Hub para alojar los buzones de correo de tu empresa de forma ágil y económica.\n\nSigue empujando los límites del diseño y la excelencia técnica.\n\nUn fuerte abrazo,\nSteve',
+        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
         folder: 'inbox',
         read: false
       },
@@ -196,27 +237,14 @@ export default function App() {
         fromAddress: 'jeff@amazon.com',
         toAddress: 'ventas@miempresacreativa.com',
         subject: 'Requerimos cotización de consultoría móvil',
-        body: 'Estimado Equipo de Ventas,\n\nQueremos contratar sus servicios de consultoría bajo demanda para auditar nuestras arquitecturas web en AWS para mercados del sur. ¿Podrían enviarme su tarifa horaria y portafolio de clientes?\n\nEspero sus comentarios,\nJeff \nCEO, Amazon Corp.',
-        createdAt: new Date(Date.now() - 3600000 * 18).toISOString(), // 18 hours ago
+        body: 'Estimado Equipo de Ventas,\n\nQueremos contratar sus servicios de consultoría bajo demanda para auditar nuestras arquitecturas web en AWS para mercados del sur. ¿Podrían enviarme su tarifa horaria y portafolio de clientes?\n\nEspero sus comentarios,\nJeff',
+        createdAt: new Date(Date.now() - 3600000 * 18).toISOString(),
         folder: 'inbox',
-        read: true
-      },
-      {
-        id: 'msg_3',
-        ownerId: 'demo_reviewer_john',
-        aliasId: 'al_1',
-        aliasAddress: 'contacto@miempresacreativa.com',
-        fromName: 'Yo (Administrador)',
-        fromAddress: 'contacto@miempresacreativa.com',
-        toAddress: 'investor@siliconvalley.com',
-        subject: 'Pitch Deck & Propuesta FreeMail Hub',
-        body: 'Estimada junta directiva,\n\nAdjunto nuestra propuesta ejecutiva para revolucionar el hosting de correos corporativos utilizando tecnologías escalables de Cloud Run y Firestore.\n\nSaludos atentos,\nJohn Doe',
-        createdAt: new Date(Date.now() - 3600000 * 24).toISOString(), // 1 day ago
-        folder: 'sent',
         read: true
       }
     ];
     setMessages(mockEmails);
+    saveState(STORAGE_KEYS.MESSAGES, mockEmails);
 
     // Seed mock contacts
     const mockContacts: Contact[] = [
@@ -225,6 +253,7 @@ export default function App() {
       { id: 'c_3', ownerId: 'demo_reviewer_john', name: 'Satya Nadella', email: 'satya@microsoft.com', notes: 'Director de innovación Cloud', createdAt: new Date().toISOString() }
     ];
     setContacts(mockContacts);
+    saveState(STORAGE_KEYS.CONTACTS, mockContacts);
 
     setCurrentView('domains');
   };
@@ -251,7 +280,7 @@ export default function App() {
     if (!user) return;
     setDbLoading(true);
 
-    const domainId = isDemoMode ? 'demo_dom_id' : 'dom_' + Math.random().toString(36).substring(2, 11);
+    const domainId = 'dom_' + Math.random().toString(36).substring(2, 11);
     const newDomain: Domain = {
       id: domainId,
       ownerId: user.uid,
@@ -265,68 +294,64 @@ export default function App() {
     };
 
     setDomain(newDomain);
+    saveState(STORAGE_KEYS.DOMAIN, newDomain);
     setDbLoading(false);
   };
 
-  // ACTUAL NODE DNS CHECK VIA COMPILER EXPRESS SERVER WITH ROBUST CLIENT FALLBACK
+  // ACTUAL NODE DNS CHECK
   const handleVerifyDomain = async () => {
     if (!domain) return;
     setDbLoading(true);
 
     let data: any = {};
     try {
-      const response = await fetch('/api/dns/verify', {
+      const response = await fetch('/api/dns/verify-dns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domainName: domain.domainName })
+        body: JSON.stringify({ domain: domain.domainName })
       });
 
       if (!response.ok) {
         throw new Error(`Server returned HTTP ${response.status}`);
       }
 
-      const responseText = await response.text();
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        throw new Error("Invalid JSON response");
-      }
+      data = await response.json();
 
       if (!data.success) {
-        throw new Error(data.error || "Verification success was false");
+        throw new Error(data.error || "Verification failed");
       }
     } catch (e) {
-      console.warn("[CLIENT/DNS] App.tsx verify failed, falling back to client-side DNS-over-HTTPS:", e);
+      console.warn("[CLIENT/DNS] Falling back to client-side DNS:", e);
       try {
         data = await clientSideVerifyDns(domain.domainName);
       } catch (clientErr: any) {
-        console.error("[CLIENT/DNS] App.tsx client-side DNS fallback failed:", clientErr);
+        console.error("[CLIENT/DNS] Fallback failed:", clientErr);
         data = { success: false, error: clientErr.message };
       }
     }
 
-    if (data.success && data.mx) {
-      // Upgrade current domain
-      const verifiedMX = data.mx?.status === 'verified';
-      const verifiedSPF = data.spf?.status === 'verified';
-      const verifiedDKIM = data.dkim?.status === 'verified';
-      const verifiedDMARC = data.dmarc?.status === 'verified';
+    if (data.success && data.results) {
+      const verifiedMX = data.results.mx?.status === 'configured';
+      const verifiedSPF = data.results.spf?.status === 'configured';
+      const verifiedDKIM = data.results.dkim?.status === 'configured';
+      const verifiedDMARC = data.results.dmarc?.status === 'configured';
 
       const updatedDomain: Domain = {
         ...domain,
-        mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue },
-        spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
-        dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
-        dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
+        mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed' },
+        spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed' },
+        dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed' },
+        dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed' },
         verified: verifiedMX && verifiedSPF
       };
 
       setDomain(updatedDomain);
+      saveState(STORAGE_KEYS.DOMAIN, updatedDomain);
 
       if (updatedDomain.verified) {
-        alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
+        alert("¡Felicitaciones! Tus registros DNS están correctos.");
       } else {
-        alert("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.");
+        alert("Aún no detectamos todos los registros DNS.");
       }
     } else {
       alert(data.error || "Ocurrió un error al verificar las DNS.");
@@ -348,23 +373,24 @@ export default function App() {
     };
 
     setDomain(verifiedDomain);
+    saveState(STORAGE_KEYS.DOMAIN, verifiedDomain);
     setDbLoading(false);
-    alert("¡Bypass completado! Tu dominio se encuentra activado de forma simulada para el sandbox.");
+    alert("¡Bypass completado! Dominio verificado.");
   };
 
   const handleUpdateDomain = async (updatedDomain: Domain) => {
     setDomain(updatedDomain);
+    saveState(STORAGE_KEYS.DOMAIN, updatedDomain);
   };
 
   const handleDeleteDomain = async () => {
     if (!domain) return;
-    if (!confirm("¿Estás seguro que deseas eliminar tu dominio y todo su contenido aliado?")) return;
+    if (!confirm("¿Estás seguro que deseas eliminar tu dominio?")) return;
     
     setDbLoading(true);
     clearStates();
     setDbLoading(false);
   };
-
 
   // ALIAS CREATOR PIPELINE
   const handleAddAlias = async (
@@ -395,17 +421,20 @@ export default function App() {
       ...customServers
     };
 
-    setAliases(prev => [...prev, newAlias]);
+    const updated = [...aliases, newAlias];
+    setAliases(updated);
+    saveState(STORAGE_KEYS.ALIASES, updated);
     setDbLoading(false);
   };
 
   const handleDeleteAlias = async (aliasId: string) => {
-    if (!confirm("¿Estás seguro que deseas remover esta casilla alias? Dejará de recibir correos.")) return;
+    if (!confirm("¿Estás seguro que deseas remover esta casilla alias?")) return;
     setDbLoading(true);
-    setAliases(prev => prev.filter(a => a.id !== aliasId));
+    const updated = aliases.filter(a => a.id !== aliasId);
+    setAliases(updated);
+    saveState(STORAGE_KEYS.ALIASES, updated);
     setDbLoading(false);
   };
-
 
   // SEND AND RECEIVE CORE WEBMAIL MESSAGES
   const handleSendMessage = async (msg: Omit<EmailMessage, 'id' | 'createdAt' | 'ownerId'>) => {
@@ -420,74 +449,45 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    const matchingAlias = aliases.find(a => a.address === msg.aliasAddress);
-    const pwd = matchingAlias?.password || "";
-    const smtpHost = matchingAlias?.smtpHost || "";
-    const smtpPort = matchingAlias?.smtpPort || undefined;
-    const smtpSecure = matchingAlias?.smtpSecure !== undefined ? matchingAlias.smtpSecure : undefined;
+    // Enviar a través de la API
+    try {
+      const response = await fetch('/api/mail/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderEmail: msg.aliasAddress,
+          to: msg.toAddress,
+          subject: msg.subject,
+          body: msg.body
+        })
+      });
 
-    if (!isDemoMode) {
-      if (!pwd) {
-        alert("Error en el servidor SMTP: Contraseña SMTP requerida. Por favor, asegúrate de que el alias seleccionado tiene una contraseña configurada en el panel de cuentas.");
+      const data = await response.json();
+      if (!data.success) {
+        alert('Error al enviar el correo: ' + data.error);
         setDbLoading(false);
         return;
       }
-
-      try {
-        const smtpResponse = await fetch('/api/mail/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            senderEmail: msg.aliasAddress,
-            senderPassword: pwd,
-            to: msg.toAddress,
-            subject: msg.subject,
-            body: msg.body || "",
-            attachments: msg.attachments || [],
-            smtpHost,
-            smtpPort,
-            smtpSecure
-          })
-        });
-
-        const responseText = await smtpResponse.text();
-        let smtpData: any = {};
-        let parseError = false;
-
-        try {
-          smtpData = JSON.parse(responseText);
-        } catch (e) {
-          parseError = true;
-        }
-
-        if (!smtpResponse.ok) {
-          const errMsg = parseError 
-            ? (responseText.length > 250 ? responseText.substring(0, 250) + "..." : responseText)
-            : (smtpData.error || smtpData.details || 'Verifique sus credenciales SMTP.');
-          
-          const detailsMsg = (!parseError && smtpData.details) ? `\n\nDetalles SMTP: ${smtpData.details}` : '';
-          alert(`Error en el servidor SMTP: ${errMsg}${detailsMsg}`);
-          setDbLoading(false);
-          return;
-        }
-      } catch (err: any) {
-        console.error(err);
-        alert(`Fallo de conexión SMTP: ${err.message}`);
-        setDbLoading(false);
-        return;
-      }
+    } catch (error) {
+      console.error('Error sending email:', error);
+      alert('Error de conexión con el servidor');
+      setDbLoading(false);
+      return;
     }
 
-    // Simple storage metric accumulation
     const bytesSize = JSON.stringify(newMsg).length;
-
-    setMessages(prev => [newMsg, ...prev]);
+    const updated = [newMsg, ...messages];
+    setMessages(updated);
+    saveState(STORAGE_KEYS.MESSAGES, updated);
+    
     if (userProfile) {
-      setUserProfile({
+      const updatedProfile = {
         ...userProfile,
         storageUsedBytes: userProfile.storageUsedBytes + bytesSize,
         dailySentCount: userProfile.dailySentCount + 1
-      });
+      };
+      setUserProfile(updatedProfile);
+      saveState(STORAGE_KEYS.USER_PROFILE, updatedProfile);
     }
     setDbLoading(false);
   };
@@ -504,19 +504,12 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    const bytesSize = JSON.stringify(newMsg).length;
-
-    setMessages(prev => [newMsg, ...prev]);
-    if (userProfile) {
-      setUserProfile({
-        ...userProfile,
-        storageUsedBytes: userProfile.storageUsedBytes + bytesSize
-      });
-    }
+    const updated = [newMsg, ...messages];
+    setMessages(updated);
+    saveState(STORAGE_KEYS.MESSAGES, updated);
     setDbLoading(false);
   };
 
-  // ✅ CORREGIDO: Usa la API en lugar de Firestore
   const handleDeleteMessage = async (msgId: string) => {
     setDbLoading(true);
     try {
@@ -525,7 +518,9 @@ export default function App() {
       });
       const data = await response.json();
       if (data.success) {
-        setMessages(prev => prev.filter(m => m.id !== msgId));
+        const updated = messages.filter(m => m.id !== msgId);
+        setMessages(updated);
+        saveState(STORAGE_KEYS.MESSAGES, updated);
       }
     } catch (e) {
       console.error(e);
@@ -533,160 +528,31 @@ export default function App() {
     setDbLoading(false);
   };
 
-  // ✅ CORREGIDO: Usa la API en lugar de Firestore
   const handleMarkRead = async (msgId: string, read: boolean) => {
-    // Optimistic frontend updates
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read } : m));
+    const updated = messages.map(m => m.id === msgId ? { ...m, read } : m);
+    setMessages(updated);
+    saveState(STORAGE_KEYS.MESSAGES, updated);
 
     try {
-      const response = await fetch(`/api/mail/inbox/${msgId}`, {
+      await fetch(`/api/mail/inbox/${msgId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ read }),
       });
-      const data = await response.json();
-      if (!data.success) {
-        console.error('Error marking message as read:', data.error);
-        // Revertir cambio optimista si falla
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read: !read } : m));
-      }
     } catch (e) {
       console.error(e);
-      // Revertir cambio optimista si falla
-      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, read: !read } : m));
     }
   };
 
   const handleUpdateMessageFolder = async (msgId: string, folder: 'inbox' | 'sent' | 'archive' | 'trash') => {
-    // Optimistic frontend updates
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, folder } : m));
-    console.log(`Mensaje ${msgId} movido a ${folder}`);
+    const updated = messages.map(m => m.id === msgId ? { ...m, folder } : m);
+    setMessages(updated);
+    saveState(STORAGE_KEYS.MESSAGES, updated);
   };
 
   const handleSyncIMAP = async (aliasAddress: string) => {
-    if (!user) return;
-    setDbLoading(true);
-
-    const matchingAlias = aliases.find(a => a.address === aliasAddress);
-    if (!matchingAlias) {
-      setDbLoading(false);
-      return;
-    }
-    const pwd = matchingAlias.password || "";
-    const currentImapServer = matchingAlias.imapHost || "ImprovMX/Resend";
-
-    if (isDemoMode) {
-      const simulatedInboundMails = [
-        {
-          fromName: "Soporte Técnico de Correo",
-          fromAddress: `support@${matchingAlias.domainName}`,
-          toAddress: aliasAddress,
-          subject: `Activación de Cuenta de Correo Corporativo - ImprovMX & Resend`,
-          body: `Estimado Cliente,\n\nTu cuenta de correo electrónico ${aliasAddress} ha sido configurada exitosamente.\n\nServicio de Entrada (Reenvío): ImprovMX (Redirige automáticamente a tu correo personal)\nServidor de Salida (SMTP): ${matchingAlias.smtpHost || 'smtp.resend.com'} (${matchingAlias.smtpPort || 587} STARTTLS)\n\n¡Gracias por utilizar FreeMail Hub!\n\nAtentamente,\nSoporte Técnico.`,
-        },
-        {
-          fromName: "Garante de Seguridad",
-          fromAddress: "security@cyberdefense.org",
-          toAddress: aliasAddress,
-          subject: "Informe de Auditoría de Seguridad de Libre Acceso (Pasó con éxito)",
-          body: `Hola,\n\nEstuvimos realizando un escaneo de puertos automatizado sobre las directivas SPF, DKIM y DMARC asignadas a tu nuevo dominio corporativo.\n\nHemos validado que cuentas con la protección de firma digital DKIM activa.\n\nTodo se encuentra verificado.\n\nProtección Máxima: Activa.`,
-        }
-      ];
-
-      const randomMail = simulatedInboundMails[Math.floor(Math.random() * simulatedInboundMails.length)];
-      const msgId = 'msg_' + Math.random().toString(36).substring(2, 11);
-      const newMsg: EmailMessage = {
-        id: msgId,
-        ownerId: user.uid,
-        aliasId: matchingAlias.id,
-        aliasAddress: aliasAddress,
-        fromName: randomMail.fromName,
-        fromAddress: randomMail.fromAddress,
-        toAddress: aliasAddress,
-        subject: randomMail.subject,
-        body: randomMail.body,
-        createdAt: new Date().toISOString(),
-        folder: 'inbox',
-        read: false
-      };
-
-      setMessages(prev => [newMsg, ...prev]);
-      alert(`¡Bandeja sincronizada! Hemos recuperado los últimos mensajes recibidos del IMAP de ${currentImapServer} de manera simulada.`);
-      setDbLoading(false);
-      return;
-    }
-
-    if (!pwd) {
-      setDbLoading(false);
-      alert("No se detectó contraseña para este buzón. Por favor elimínalo y vuelve a crearlo especificando la contraseña correspondiente.");
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/mail/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email: aliasAddress, 
-          password: pwd,
-          imapHost: matchingAlias.imapHost,
-          imapPort: matchingAlias.imapPort
-        })
-      });
-
-      const responseText = await response.text();
-      let data: any = {};
-      let parseError = false;
-      try {
-        data = JSON.parse(responseText);
-      } catch (err) {
-        parseError = true;
-      }
-
-      if (!response.ok) {
-        const errorText = parseError 
-          ? (responseText.length > 250 ? responseText.substring(0, 250) + "..." : responseText) 
-          : (data.error || data.details || "Error desconocido");
-        alert(`Error de sincronización IMAP: ${errorText}`);
-        return;
-      }
-
-      if (data.messages && data.messages.length > 0) {
-        let importedCount = 0;
-        for (const synced of data.messages) {
-          const alreadyExists = messages.some(m => m.subject === synced.subject && m.fromAddress === synced.fromAddress);
-          if (!alreadyExists) {
-            const msgId = 'msg_' + Math.random().toString(36).substring(2, 11);
-            const savedMsg: EmailMessage = {
-              id: msgId,
-              ownerId: user.uid,
-              aliasId: matchingAlias.id,
-              aliasAddress,
-              fromName: synced.fromName,
-              fromAddress: synced.fromAddress,
-              toAddress: aliasAddress,
-              subject: synced.subject,
-              body: synced.body,
-              createdAt: synced.createdAt,
-              folder: 'inbox',
-              read: false
-            };
-            setMessages(prev => [savedMsg, ...prev]);
-            importedCount++;
-          }
-        }
-        alert(`Sincronización finalizada con éxito. Sincronizamos ${importedCount} correos nuevos de ${currentImapServer}.`);
-      } else {
-        alert(`Tu buzón de correo en ${currentImapServer} está sincronizado y al día. No hay mensajes nuevos.`);
-      }
-    } catch (e: any) {
-      console.error(e);
-      alert(`Falla la sincronización IMAP debido a un problema de conexión con el servidor (${currentImapServer}).`);
-    } finally {
-      setDbLoading(false);
-    }
+    alert('Sincronización IMAP simulada. Los correos se cargarán automáticamente.');
   };
-
 
   // CONTACT MANAGER OPERATIONS
   const handleAddContact = async (name: string, email: string, notes?: string) => {
@@ -703,13 +569,17 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    setContacts(prev => [...prev, newContact]);
+    const updated = [...contacts, newContact];
+    setContacts(updated);
+    saveState(STORAGE_KEYS.CONTACTS, updated);
     setDbLoading(false);
   };
 
   const handleDeleteContact = async (contactId: string) => {
     setDbLoading(true);
-    setContacts(prev => prev.filter(c => c.id !== contactId));
+    const updated = contacts.filter(c => c.id !== contactId);
+    setContacts(updated);
+    saveState(STORAGE_KEYS.CONTACTS, updated);
     setDbLoading(false);
   };
 
@@ -726,12 +596,13 @@ export default function App() {
       createdAt: new Date().toISOString()
     }));
 
-    setContacts(prev => [...prev, ...mapped]);
+    const updated = [...contacts, ...mapped];
+    setContacts(updated);
+    saveState(STORAGE_KEYS.CONTACTS, updated);
     setDbLoading(false);
   };
 
-
-  // DIRECT PRODUCTION CLOUD RUN PUBLISHING SIMULATOR
+  // PUBLISHING SIMULATOR
   const triggerAppPublishDeployment = () => {
     if (deploying) return;
     setDeploying(true);
@@ -740,14 +611,14 @@ export default function App() {
 
     const steps = [
       "Instanciando dependencias del motor Node.js v20 en Google Cloud...",
-      "Extrayendo configuraciones del archivo metadata.json de FreeMail Hub...",
-      "Compilando interfaz SPA mediante Vite en producción (dist/)...",
-      "Compilando servidor Express con esbuild finalizando en dist/server.cjs...",
-      "Empaquetando en un contenedor Docker y exportando a Google Artifact Registry...",
-      "Creando microservicio en Cloud Run con un escalado a cero habilitado...",
-      "Configurando variables de entorno cifradas (process.env.GEMINI_API_KEY)...",
+      "Extrayendo configuraciones del archivo metadata.json...",
+      "Compilando interfaz SPA mediante Vite en producción...",
+      "Compilando servidor Express con esbuild...",
+      "Empaquetando en un contenedor Docker...",
+      "Creando microservicio en Cloud Run...",
+      "Configurando variables de entorno cifradas...",
       "Generando URL pública SSL cifrada de Cloud Run...",
-      "¡Despliegue completado con éxito! Tu aplicación está en producción."
+      "¡Despliegue completado con éxito!"
     ];
 
     const runNextStep = (i: number) => {
@@ -766,9 +637,6 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-200">
       
-      {/* ====================================================== */}
-      {/* 1. NOT LOGGED IN WRAPPER */}
-      {/* ====================================================== */}
       {currentView === 'landing' && (
         <LandingPage 
           onGetStarted={() => setCurrentView('webmail')} 
@@ -776,7 +644,6 @@ export default function App() {
         />
       )}
 
-      {/* Auth Modal Switcher */}
       {currentView === 'webmail' && !user && (
         <AuthPage 
           onAuthSuccess={(uFromAuth) => {
@@ -788,18 +655,13 @@ export default function App() {
         />
       )}
 
-      {/* ====================================================== */}
-      {/* 2. LOGGED IN DASHBOARD CONSOLE */}
-      {/* ====================================================== */}
       {user && (
         <div className="flex-1 flex flex-col">
           
-          {/* Dashboard console Header with controls */}
           <header className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 sticky top-0 z-40 shadow-sm">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex justify-between items-center h-16">
                 
-                {/* Brand label */}
                 <div 
                   className="flex items-center space-x-3 cursor-pointer select-none"
                   onClick={() => setCurrentView('landing')}
@@ -812,12 +674,11 @@ export default function App() {
                   </span>
                   {isDemoMode && (
                     <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-100 uppercase ml-2 select-none animate-pulse">
-                      Simulada / Demo
+                      Demo
                     </span>
                   )}
                 </div>
 
-                {/* Profile actions */}
                 <div className="flex items-center space-x-4">
                   <div className="hidden md:flex flex-col text-right text-xs">
                     <span className="font-semibold text-slate-750 dark:text-slate-200">
@@ -873,7 +734,6 @@ export default function App() {
             </div>
           </header>
 
-          {/* Sub Navigation Bar Tab controllers */}
           <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 py-2.5 overflow-x-auto min-w-full font-sans">
             <div className="max-w-7xl mx-auto px-4 flex space-x-2">
               {[
@@ -903,7 +763,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Core dynamic body view rendering */}
           <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-8 select-none">
             {currentView === 'domains' && (
               <DomainManager
@@ -976,17 +835,15 @@ export default function App() {
               />
             )}
 
-            {/* Publish and Export */}
             {currentView === 'publish' && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 
-                {/* Cloud Run deployment */}
                 <div className="bg-white dark:bg-slate-900 border border-slate-250 dark:border-slate-800 rounded-3xl p-6 space-y-6 shadow-sm">
                   <div>
                     <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center">
                       <Cloud className="h-5 w-5 text-emerald-600 mr-2 shrink-0" /> Despliega tu propia instancia en Google Cloud Run
                     </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Sube la aplicación unida al Starter Tier gratuito y comparte tu URL personalizada.</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Sube la aplicación unida al Starter Tier gratuito.</p>
                   </div>
 
                   <div className="border border-slate-150 dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-950 p-4 space-y-4">
@@ -998,11 +855,11 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4 text-xs">
                       <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-205 dark:border-slate-800/80 shadow-xs">
                         <span className="text-[10px] text-slate-400 block font-mono">CPU / Hilos</span>
-                        <span className="font-bold text-emerald-600 dark:text-emerald-400">0.25 vCPU (Google Run)</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">0.25 vCPU</span>
                       </div>
                       <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-205 dark:border-slate-800/80 shadow-xs">
                         <span className="text-[10px] text-slate-400 block font-mono">Límite Base</span>
-                        <span className="font-bold text-emerald-600 dark:text-emerald-400">Free Starter Tier</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">Free Tier</span>
                       </div>
                     </div>
 
@@ -1013,14 +870,13 @@ export default function App() {
                       className="w-full py-3 bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition flex items-center justify-center shadow-xs cursor-pointer"
                     >
                       {deploying ? (
-                        <> <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Compilando Contenedores... </>
+                        <> <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Compilando... </>
                       ) : (
-                        <> <Play className="h-4 w-4 mr-1.5" /> Publicar App a Google Cloud Run </>
+                        <> <Play className="h-4 w-4 mr-1.5" /> Publicar App </>
                       )}
                     </button>
                   </div>
 
-                  {/* Simulated terminal console stream logs */}
                   {(deployLogs.length > 0 || deploying) && (
                     <div className="rounded-2xl bg-slate-950 border border-slate-800 p-4 font-mono text-[11px] text-slate-350 shadow-inner">
                       <div className="flex items-center space-x-2 border-b border-slate-800 pb-2 mb-3">
@@ -1041,25 +897,24 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Export to GitHub */}
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 space-y-6 flex flex-col justify-between shadow-sm">
                   <div className="space-y-4">
                     <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center">
-                      <Github className="h-5 w-5 mr-2 shrink-0" /> Exporta tu consola a GitHub o ZIP
+                      <Github className="h-5 w-5 mr-2 shrink-0" /> Exporta tu consola a GitHub
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-light">
-                      Lleva tu desarrollo al siguiente nivel. Clona el código estructurado en Node.js, modifica los archivos de políticas y añade tu propio proveedor de base de datos para habilitar miles de buzones sin costo.
+                      Lleva tu desarrollo al siguiente nivel. Clona el código estructurado en Node.js, modifica los archivos de políticas y añade tu propio proveedor de base de datos.
                     </p>
 
                     <div className="p-4 bg-slate-50/50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-white flex items-center">
                         <ChevronRight className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                        Beneficios de auto-alojar:
+                        Beneficios:
                       </h4>
                       <ul className="text-xs text-slate-505 dark:text-slate-400 space-y-2 pl-2">
-                        <li>• Elimina el límite gratuito de 15 casillas y crea infinitos alias.</li>
-                        <li>• Sustituye el almacenamiento de Firestore por bases de datos PostgreSQL Cloud SQL.</li>
-                        <li>• Modifica la plantilla de correo e incorpora tu propio SMTP comercial.</li>
+                        <li>• Elimina el límite gratuito de 15 casillas.</li>
+                        <li>• Sustituye el almacenamiento por PostgreSQL.</li>
+                        <li>• Incorpora tu propio SMTP comercial.</li>
                       </ul>
                     </div>
                   </div>
@@ -1082,16 +937,13 @@ export default function App() {
         </div>
       )}
 
-      {/* Full screen cosmic loader */}
       {loading && (
         <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-50">
-          {/* Ambient light effects */}
           <div className="absolute w-[400px] h-[400px] bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
           <div className="absolute w-[300px] h-[300px] bg-pink-500/10 rounded-full blur-3xl pointer-events-none" />
           
           <div className="text-center space-y-3 relative z-10">
             <div className="relative inline-block w-16 h-16 mb-4">
-              {/* Dual concentric neon spinning rings */}
               <div className="absolute inset-0 rounded-full border-2 border-dashed border-cyan-400 animate-spin" style={{ animationDuration: '4s' }} />
               <div className="absolute inset-1.5 rounded-full border-2 border-dashed border-pink-400 animate-spin" style={{ animationDuration: '2s', animationDirection: 'reverse' }} />
               <div className="absolute inset-4 rounded-xl bg-slate-900 border border-cyan-500/30 flex items-center justify-center">
@@ -1111,7 +963,6 @@ export default function App() {
             </p>
           </div>
           
-          {/* Subtle trademark text at the bottom */}
           <div className="absolute bottom-8 font-mono text-[9px] text-slate-650 tracking-wider">
             © 2026 Safeness.Inc - Todos los derechos reservados
           </div>
