@@ -50,7 +50,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 // ============================================
-// WEBHOOK PARA RECIBIR CORREOS (RESEND) - MEJORADO
+// WEBHOOK PARA RECIBIR CORREOS (RESEND - MEJORADO)
 // ============================================
 
 app.post("/api/mail/webhook", async (req, res) => {
@@ -58,61 +58,73 @@ app.post("/api/mail/webhook", async (req, res) => {
     console.log("[Webhook] 📩 Correo recibido:");
     console.log("[Webhook] Body completo:", JSON.stringify(req.body, null, 2));
     
-    // Extraer datos del correo según el formato de Resend
-    // Resend envía los datos en el campo 'data' o directamente en el body
-    const data = req.body.data || req.body;
+    // Resend envía los datos en diferentes formatos
+    // Puede estar en req.body.data o directamente en req.body
+    const payload = req.body.data || req.body;
     
-    // Extraer información del remitente y destinatario
-    const from = data.from || data.sender || data.fromAddress || 'remitente@desconocido.com';
-    const to = data.to || data.recipient || data.toAddress || 'destinatario@desconocido.com';
-    const subject = data.subject || '(Sin Asunto)';
-    const text = data.text || data.body || '';
-    const html = data.html || data.bodyHtml || '';
-    const attachments = data.attachments || [];
-    
-    // Extraer el nombre del remitente (si está disponible)
+    // Extraer información del remitente (from)
+    let fromAddress = 'remitente@desconocido.com';
     let fromName = 'Remitente';
-    let fromAddress = from;
     
-    if (typeof from === 'string' && from.includes('<')) {
-      // Formato: "Nombre <email@dominio.com>"
-      const match = from.match(/^(.*?)\s*<(.+?)>$/);
+    // Caso 1: from es un string con formato "Nombre <email>"
+    if (typeof payload.from === 'string') {
+      const match = payload.from.match(/^(.*?)\s*<(.+?)>$/);
       if (match) {
-        fromName = match[1].trim() || 'Remitente';
+        fromName = match[1].trim();
         fromAddress = match[2].trim();
+      } else {
+        fromAddress = payload.from;
+        fromName = payload.from.split('@')[0] || 'Remitente';
       }
-    } else if (typeof from === 'string' && from.includes('@')) {
-      // Solo email
-      fromName = from.split('@')[0] || 'Remitente';
-      fromAddress = from;
-    } else if (typeof from === 'object' && from.address) {
-      // Formato objeto
-      fromName = from.name || from.address.split('@')[0] || 'Remitente';
-      fromAddress = from.address;
+    } 
+    // Caso 2: from es un objeto con name y address
+    else if (typeof payload.from === 'object' && payload.from !== null) {
+      fromAddress = payload.from.address || payload.from.email || 'remitente@desconocido.com';
+      fromName = payload.from.name || fromAddress.split('@')[0] || 'Remitente';
     }
     
-    // Extraer el destinatario
-    let toAddress = to;
-    if (typeof to === 'string' && to.includes('<')) {
-      const match = to.match(/^(.*?)\s*<(.+?)>$/);
+    // Extraer información del destinatario (to)
+    let toAddress = 'destinatario@desconocido.com';
+    
+    if (typeof payload.to === 'string') {
+      const match = payload.to.match(/^(.*?)\s*<(.+?)>$/);
       if (match) {
         toAddress = match[2].trim();
+      } else {
+        toAddress = payload.to;
       }
-    } else if (typeof to === 'object' && to.address) {
-      toAddress = to.address;
+    } else if (typeof payload.to === 'object' && payload.to !== null) {
+      toAddress = payload.to.address || payload.to.email || 'destinatario@desconocido.com';
+    } else if (Array.isArray(payload.to) && payload.to.length > 0) {
+      // Si to es un array (como en el log de Resend que mostraste)
+      const firstTo = payload.to[0];
+      if (typeof firstTo === 'string') {
+        const match = firstTo.match(/^(.*?)\s*<(.+?)>$/);
+        toAddress = match ? match[2].trim() : firstTo;
+      } else if (typeof firstTo === 'object') {
+        toAddress = firstTo.address || firstTo.email || 'destinatario@desconocido.com';
+      }
     }
+    
+    // Extraer el resto de los datos
+    const subject = payload.subject || '(Sin Asunto)';
+    const text = payload.text || payload.body || '';
+    const html = payload.html || payload.bodyHtml || text;
+    const attachments = payload.attachments || [];
+    const id = payload.id || `email_${Date.now()}`;
+    const createdAt = payload.createdAt || payload.timestamp || new Date().toISOString();
     
     // Crear objeto del correo con datos completos
     const emailData = {
-      id: data.id || `email_${Date.now()}`,
+      id: id,
       from: fromAddress,
       fromName: fromName,
       to: toAddress,
       subject: subject,
       text: text,
-      html: html || text,
+      html: html,
       attachments: attachments,
-      createdAt: data.createdAt || data.timestamp || new Date().toISOString(),
+      createdAt: createdAt,
       receivedAt: new Date().toISOString()
     };
     
@@ -148,6 +160,7 @@ app.post("/api/mail/webhook", async (req, res) => {
     });
   }
 });
+
 // ============================================
 // OBTENER CORREOS RECIBIDOS (PARA EL FRONTEND)
 // ============================================
@@ -364,7 +377,7 @@ app.post("/api/ai/draft", async (req, res) => {
 app.get("/api", (_req, res) => {
   res.json({
     message: "FreeMail Hub API funcionando correctamente",
-    version: "3.1.0",
+    version: "3.2.0",
     endpoints: [
       "/api/health",
       "/api/mail/send",
