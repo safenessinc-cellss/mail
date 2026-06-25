@@ -38,6 +38,7 @@ import DomainManager from './components/DomainManager';
 import AccountManager from './components/AccountManager';
 import WebmailClient from './components/WebmailClient';
 import GmailConnector from './components/GmailConnector';
+import { clientSideVerifyDns } from './lib/dnsClientFallback';
 import AdminDashboard from './components/AdminDashboard';
 import SettingsPanel from './components/SettingsPanel';
 import MultiDomainArchitecture from './components/MultiDomainArchitecture';
@@ -361,11 +362,12 @@ export default function App() {
     setDbLoading(false);
   };
 
-  // ACTUAL NODE DNS CHECK VIA COMPILER EXPRESS SERVER
+  // ACTUAL NODE DNS CHECK VIA COMPILER EXPRESS SERVER WITH ROBUST CLIENT FALLBACK
   const handleVerifyDomain = async () => {
     if (!domain) return;
     setDbLoading(true);
 
+    let data: any = {};
     try {
       const response = await fetch('/api/dns/verify', {
         method: 'POST',
@@ -373,51 +375,61 @@ export default function App() {
         body: JSON.stringify({ domainName: domain.domainName })
       });
 
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}`);
+      }
+
       const responseText = await response.text();
-      let data: any = {};
-      let parseError = false;
       try {
         data = JSON.parse(responseText);
       } catch (e) {
-        parseError = true;
+        throw new Error("Invalid JSON response");
       }
 
-      if (response.ok && !parseError && data.success && data.mx) {
-        // Upgrade current domain
-        const verifiedMX = data.mx?.status === 'verified';
-        const verifiedSPF = data.spf?.status === 'verified';
-        const verifiedDKIM = data.dkim?.status === 'verified';
-        const verifiedDMARC = data.dmarc?.status === 'verified';
-
-        const updatedDomain: Domain = {
-          ...domain,
-          mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue },
-          spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
-          dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
-          dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
-          verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
-        };
-
-        if (isDemoMode) {
-          setDomain(updatedDomain);
-        } else {
-          await setDoc(doc(db, 'domains', domain.id), updatedDomain);
-        }
-
-        if (updatedDomain.verified) {
-          alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
-        } else {
-          alert("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.");
-        }
-      } else {
-        alert(data.error || "Ocurrió un error al verificar las DNS.");
+      if (!data.success) {
+        throw new Error(data.error || "Verification success was false");
       }
     } catch (e) {
-      console.error(e);
-      alert("Error de conexión durante la comprobación de DNS.");
-    } finally {
-      setDbLoading(false);
+      console.warn("[CLIENT/DNS] App.tsx verify failed, falling back to client-side DNS-over-HTTPS:", e);
+      try {
+        data = await clientSideVerifyDns(domain.domainName);
+      } catch (clientErr: any) {
+        console.error("[CLIENT/DNS] App.tsx client-side DNS fallback failed:", clientErr);
+        data = { success: false, error: clientErr.message };
+      }
     }
+
+    if (data.success && data.mx) {
+      // Upgrade current domain
+      const verifiedMX = data.mx?.status === 'verified';
+      const verifiedSPF = data.spf?.status === 'verified';
+      const verifiedDKIM = data.dkim?.status === 'verified';
+      const verifiedDMARC = data.dmarc?.status === 'verified';
+
+      const updatedDomain: Domain = {
+        ...domain,
+        mxRecord: { ...domain.mxRecord, status: verifiedMX ? 'verified' : 'failed', currentValue: data.mx?.currentValue },
+        spfRecord: { ...domain.spfRecord, status: verifiedSPF ? 'verified' : 'failed', currentValue: data.spf?.currentValue },
+        dkimRecord: { ...domain.dkimRecord, status: verifiedDKIM ? 'verified' : 'failed', currentValue: data.dkim?.currentValue },
+        dmarcRecord: { ...domain.dmarcRecord, status: verifiedDMARC ? 'verified' : 'failed', currentValue: data.dmarc?.currentValue },
+        verified: verifiedMX && verifiedSPF // MX and SPF are required for minimum operation
+      };
+
+      if (isDemoMode) {
+        setDomain(updatedDomain);
+      } else {
+        await setDoc(doc(db, 'domains', domain.id), updatedDomain);
+      }
+
+      if (updatedDomain.verified) {
+        alert("¡Felicitaciones! Hemos validado con éxito tus registros DNS corporativos. Tu servicio de correo ya está activo.");
+      } else {
+        alert("Aún no detectamos todos los registros DNS como correctos. Revisa que ingresaras los valores esperados.");
+      }
+    } else {
+      alert(data.error || "Ocurrió un error al verificar las DNS.");
+    }
+    setDbLoading(false);
   };
 
   const handleForceVerifyDomain = async () => {
