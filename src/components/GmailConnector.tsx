@@ -165,7 +165,7 @@ export default function GmailConnector({
               <li>
                 <strong>3. Conecta a nuestro Servidor SMTP:</strong> 
                 <div className="p-3 bg-white dark:bg-slate-900 rounded-xl mt-2 border border-slate-150 dark:border-slate-800 font-mono text-[10px] text-slate-700 dark:text-slate-300 select-text">
-                  <p>• Servidor: <strong>smtp.freemailhub.com</strong></p>
+                  <p>• Servidor: <strong>smtp.resend.com</strong></p>
                   <p>• Puerto: <strong>587 (TLS / SSL recomendado)</strong></p>
                   <p>• Usuario: <strong>[Tu Cuenta Alias de FreeMail]</strong></p>
                   <p>• Contraseña: <strong>[La clave secreta generada en tu consola]</strong></p>
