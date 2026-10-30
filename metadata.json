@@ -1,8 +1,0 @@
-{
-  "name": "Remix: FreeMail Hub",
-  "description": "Obtén correos electrónicos gratuitos para tu propio dominio personalizado con bandeja de entrada, SMTP integrado y DNS configurable.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}

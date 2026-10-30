@@ -1,20 +1,18 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# TuiPhone
+Private browser calling desk for incoming calls to a US Twilio number.
 
-# Run and deploy your AI Studio app
+## Included
+- Google OAuth login with signed HTTP-only session cookies.
+- Twilio Voice browser registration and live incoming caller ID.
+- Answer / decline controls and validated Twilio webhook.
+- Provider secrets remain server-side.
 
-This contains everything you need to run your app locally.
+## Configure Vercel
+Set every variable in .env.example in Project Settings → Environment Variables. In Google Cloud Console create an OAuth Web client and add the exact callback URL https://YOUR_DOMAIN/api/auth/callback/google. Set GOOGLE_REDIRECT_URI to that same URL.
 
-View your app in AI Studio: https://ai.studio/apps/040e3146-64b4-4839-8a06-050816f99ded
+In Twilio Console create a Standard API Key. Set Account SID, Auth Token, API Key SID and API Key Secret. Use a US phone number with Voice capability and set its incoming Voice webhook to https://YOUR_DOMAIN/api/twilio/incoming using HTTP POST. Set TWILIO_INCOMING_WEBHOOK_URL to the exact public webhook URL, then redeploy.
 
-## Run Locally
+Sign in with Google, keep the browser tab open and allow microphone access. Incoming calls will ring the browser identity owner.
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Limits
+Twilio numbers and usage are paid. Caller ID is carrier-supplied; private/withheld IDs cannot be recovered. This first release shows live calls only: no persistent call history, recordings, outbound calling, or guaranteed background ringing. OAuth currently accepts any verified Google account; add an email allowlist before multi-user use. Never commit secrets.

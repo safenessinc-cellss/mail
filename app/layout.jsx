@@ -1,0 +1,1 @@
+import "./globals.css";export const metadata={title:"TuiPhone — US Calling Desk",description:"Private US phone line powered by Twilio."};export default function RootLayout({children}){return <html lang="en"><body>{children}</body></html>}
